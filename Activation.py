@@ -16,6 +16,7 @@ class ActivationLogistic(Activation):
     def name(self):         return "logistic"
     def ideal_domain(self): return [-0.1,1.1]
     def ideal_range(self):  return [ 0.1,0.9]
+    def actual_range(self): return [ 0.0,1.0]
 
     def __call__(self,A,out=None,dout=None):
         if out == None:
@@ -32,6 +33,7 @@ class ActivationTanh(Activation):
     def name(self):         return "tanh"
     def ideal_domain(self): return [-1.2,1.2]
     def ideal_range(self):  return [-0.9,0.9]
+    def actual_range(self): return [-1.0,1.0]
 
     def __call__(self,A,out=None,dout=None):
         if out == None:
@@ -48,6 +50,7 @@ class ActivationRelu(Activation):
     def name(self):         return "relu"
     def ideal_domain(self): return [-1.2,1.2]
     def ideal_range(self):  return [ 0.0,1.0]
+    def actual_range(self): return [ 0.0,inf]
 
     def __call__(self,A,out=None,dout=None):
         if out == None:
@@ -65,6 +68,7 @@ class ActivationSoftmax(Activation):
     def name(self):         return "softmax"
     def ideal_domain(self): return [0.0,1.0]
     def ideal_range(self):  return [0.0,1.0]
+    def actual_range(self): return [0.0,1.0]
     def ideal_loss(self):   return 'nll'
 
     def __call__(self,A,out=None,dout=None):

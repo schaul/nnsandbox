@@ -8,12 +8,13 @@ import itertools
 def main():
     
     report_args = { 'verbose'   : True,
-                    'interval'  : 5,     # how many epochs between progress reports (larger is faster)
+                    'interval'  : 1,       # how many epochs between progress reports (larger is faster)
+                    'interval_rate' : 1.45,
                     'visualize' : True,
                     'log_mode'  : 'html_anim' }
 
     data = load_mnist(digits=[5,6,8,9],
-                      split=[20,5,0])
+                      split=[30,15,0])
 
     ######################################################
     # Generate a list of training configurations to try, 
@@ -22,6 +23,7 @@ def main():
     settings,prefix = make_train_settings_basic()
     settings = enumerate_settings(settings)
     index = 1
+    num_restarts = 2  # How many random restarts do we try with the same parameters
 
     open_logfile("gen_trainees-%s" % prefix,"%d total variants" % len(settings))
 
@@ -30,21 +32,22 @@ def main():
         print setting['model']
         print setting['train']
 
-        # Create the model and scale the data if necessary
-        model = make_model(setting['model'],data.Xshape,data.Yshape)
-        data.rescale(model.ideal_domain(),model.ideal_range())
+        for rep in range(num_restarts):
+            # Create the model and scale the data if necessary
+            model = make_model(setting['model'],data.Xshape,data.Yshape)
+            data.rescale(model.ideal_domain(),model.ideal_range())
 
-        # Set up a callback to collect snapshots of the training run
-        snapshots = []
-        report_args['callback'] = lambda event,status: report_callback(setting,snapshots,model,event,status)
+            # Set up a callback to collect snapshots of the training run
+            snapshots = []
+            report_args['callback'] = lambda event,status: report_callback(setting,snapshots,model,event,status)
 
-        # Train the model
-        trainer = TrainingRun(model,data,report_args,**setting['train'])
-        trainer.train()
+            # Train the model
+            trainer = TrainingRun(model,data,report_args,**setting['train'])
+            trainer.train()
 
-        # Save the training run to disk
-        save_trainee(snapshots,setting,prefix,index); 
-        index += 1
+            # Save the training run to disk
+            save_trainee(snapshots,setting,prefix,index); 
+            index += 1
 
     #####################################################
     
@@ -82,24 +85,24 @@ def make_train_settings_basic():
 
     # model parameters to try
     model = Setting()
-    model.activation = [["logistic","softmax"]]
-    model.size     = [[30],
-                      [90],
-                      [360]]
+    model.activation = [["logistic","softmax"],["tanh","softmax"]]
+    model.size     = [[25],
+                      [75],
+                      [225]]
     model.dropout  = [None]
     model.maxnorm  = [None]
-    model.sparsity = [None,(0.0001,0.01),(0.001,0.01)]
+    model.sparsity = [None,(5e-6,0.02),(5e-5,0.02)]
     model.L1       = [None,1e-6,1e-4]
-    model.L2       = [None,1e-6,1e-4]
+    model.L2       = [None,1e-6]
 
     # training parameters to try
     train = Setting()
-    train.learn_rate       = [0.25,1.0,2.0]
-    train.learn_rate_decay = [0.98]
+    train.learn_rate       = [0.005,0.02]
+    train.learn_rate_decay = [0.985]
     train.momentum         = [0.75]
     train.momentum_range   = [[0,inf]]
-    train.batchsize        = [16,32,64,128]
-    train.epochs           = [100]
+    train.batchsize        = [16,64,256]
+    train.epochs           = [85]
 
     return { 'model' : model, 'train' : train }, "basic"
 

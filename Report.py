@@ -67,11 +67,13 @@ def close_logfile():
 
 class TrainingReport(object):
 
-    def __init__(self,trainer,verbose=True,interval=10,visualize=False,log_mode='none',callback=None):
+    def __init__(self,trainer,verbose=True,interval=10,interval_rate=1.0,visualize=False,log_mode='none',callback=None):
         self.trainer = trainer
         self.verbose = verbose
         self.visualize = visualize
+        self._last_update_epoch = 0
         self.interval  = interval
+        self.interval_rate = interval_rate
         self.log_mode = log_mode  # "none", "html", "html_anim" for animated gifs
         self.callback = callback
         self._callback_msg = None
@@ -88,8 +90,10 @@ class TrainingReport(object):
         the 'trainer'. 
         '''
         # Only update stats at certain epoch intervals, for the sake of training speed
-        if event == "epoch" and mod(self.trainer.epoch,self.interval) != 0:
+        if event == "epoch" and (self.trainer.epoch - self._last_update_epoch) < int(self.interval):
             return
+        self._last_update_epoch = self.trainer.epoch
+        self.interval *= self.interval_rate  # speed up or slow down the rate of updates that get logged
 
         stats = {}
         stats["time"]  = now() - self._start_time
@@ -246,7 +250,7 @@ class TrainingReportWindow(Tk.Frame):
         self.master.columnconfigure(1,weight=1)
         dpi = 80.0
         self.plots = {}
-        row0_ht = 200
+        row0_ht = 250
         row1_ht = 120
 
         # Add error plot in top-left cell
@@ -268,7 +272,8 @@ class TrainingReportWindow(Tk.Frame):
         # *Hidden activity* statistics in bottom-right cell
         get_hidden = lambda event,stats: stats["train"]["H"]
         hidden_percentiles =  list(100*(1-linspace(0.1,.9,10)**1.5))
-        self.plots["hstats"] = TrainingReportPercentiles(self.master,(300,row1_ht),dpi,get_hidden,hidden_percentiles)
+        ranges = [layer.f.actual_range() for layer in trainer.model._cfg[1:]]
+        self.plots["hstats"] = TrainingReportPercentiles(self.master,(300,row1_ht),dpi,get_hidden,hidden_percentiles,ranges=ranges)
         self.plots["hstats"].canvas.get_tk_widget().grid(row=1,column=1,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
         self.master.protocol("WM_DELETE_WINDOW",self._close_window)
@@ -276,7 +281,6 @@ class TrainingReportWindow(Tk.Frame):
         self.master.title("Training Report")
         self.update()
         self._redraw_interval = 500
-        self.after(self._redraw_interval,self.redraw)
 
     def log(self,event,stats,msg):
         for plot in self.plots.values():
@@ -290,14 +294,12 @@ class TrainingReportWindow(Tk.Frame):
 
     def _close_window(self):
         self.want_quit = True  # quit later
-        self.after(5,self._quit_program)
 
     def redraw(self):
         for plot in self.plots.values():
             plot.redraw()
         self.update()
         self.update_idletasks()
-        self.after(self._redraw_interval,self.redraw)
 
     def save_figure(self):
         global _curr_logfile
@@ -313,6 +315,7 @@ class TrainingReportWindow(Tk.Frame):
         for pname in pnames:
             fnames.append(tempname % pname)
             plot = self.plots[pname]
+            plot.redraw()
             plot.savefig(fnames[-1],dpi=80)
 
         # Then use ImageMagick to put them together again
@@ -528,7 +531,7 @@ class TrainingReportFeatureGrid(Figure):
 
 class TrainingReportPercentiles(Figure):
 
-    def __init__(self,master,size,dpi,get_matrices_fn,percentiles):
+    def __init__(self,master,size,dpi,get_matrices_fn,percentiles,ranges=None):
         Figure.__init__(self,figsize=(size[0]/dpi,size[1]/dpi),dpi=dpi,facecolor='w',edgecolor='b',frameon=True,linewidth=0)
         FigureCanvas(self,master=master)
         self.master = master
@@ -536,6 +539,7 @@ class TrainingReportPercentiles(Figure):
         self._get_matrices_fn = get_matrices_fn
         self._P = []
         self._t = percentiles
+        self._ranges = ranges
         self.add_subplot(111,axisbg='w')
         
     def log(self,event,stats):
@@ -556,20 +560,26 @@ class TrainingReportPercentiles(Figure):
             nlayer = len(self._P)
             for k in range(nlayer):
                 P = self._P[k]
-                Prange = (P.ravel().min(),P.ravel().max())
+                if self._ranges != None: 
+                    Prange = self._ranges[k]
+                else:
+                    Prange = [-inf,inf]
+                if Prange[0] == -inf: Prange[0] = P.ravel().min()
+                if Prange[1] ==  inf: Prange[1] = P.ravel().max()
                 P -= Prange[0]
                 if Prange[1] != Prange[0]:
                     P *= 255/(Prange[1]-Prange[0])
-                img = asarray(P,dtype='uint8')
+
                 zoom = 8
+                img = asarray(P,dtype='uint8')
                 img = repeat(img,zoom,axis=0)
                 img = repeat(img,zoom,axis=1)
 
                 x0,y0 = (k+0.5)*(wd-img.shape[1])/nlayer, (ht-img.shape[0])/2
-                self.figimage(img,x0,y0,None,None,cm.gray,zorder=2)
+                self.figimage(img,x0,y0,None,None,cm.gray,zorder=2,vmin=0,vmax=255)
 
                 # Print the range of the colormap we're seeing
-                self.text(float(x0)/wd,float(y0-15)/ht,'[%.3f,%.3f]' % Prange,zorder=5)
+                self.text(float(x0)/wd,float(y0-15)/ht,'[%.3f,%.3f]' % tuple(Prange),zorder=5)
                 self.text(float(x0)/wd,float(y0+img.shape[0]+5)/ht,'layer%d' % k,zorder=5)
 
             self.canvas.draw()

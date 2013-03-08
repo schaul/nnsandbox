@@ -46,7 +46,7 @@ class TrainingRun(object):
             self.batches.shuffle()
 
             # Compute momentum for this epoch
-            self.momentum = self.momentum_max if self.epoch in self.momentum_range else 0.0
+            self.momentum = self.momentum_max if (self.epoch >= self.momentum_range[0] and self.epoch < self.momentum_range[1]) else 0.0
 
             # Inner loop over one shuffled sweep of the data
             for batch in self.batches:
