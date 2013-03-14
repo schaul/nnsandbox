@@ -3,9 +3,12 @@ from DataSet import *
 from Util import *
 from TrainingRun import *
 from Report import open_logfile,close_logfile
+from BigMat import garbage_collect
 import itertools
 
 def main():
+
+    set_backend("gnumpy")
     
     report_args = { 'verbose'   : True,
                     'interval'  : 1,       # how many epochs between progress reports (larger is faster)
@@ -14,20 +17,24 @@ def main():
                     'log_mode'  : 'html_anim' }
 
     data = load_mnist(digits=[5,6,8,9],
-                      split=[30,15,0])
+                      split=[30,10,0])
+
+    settings_name = "basic2"
 
     ######################################################
     # Generate a list of training configurations to try, 
     # and loop over them.
     #
-    settings,prefix = make_train_settings_basic()
+    settings,prefix = make_train_settings(settings_name)
     settings = enumerate_settings(settings)
-    index = 1
-    num_restarts = 2  # How many random restarts do we try with the same parameters
+    index = 320
+    num_restarts = 1  # How many random restarts do we try with the same parameters
 
-    open_logfile("gen_trainees-%s" % prefix,"%d total variants" % len(settings))
-
-    for setting in settings:
+    open_logfile("gen_trainees-%s" % prefix,"%d total variants; %d restarts each" % (len(settings),num_restarts))
+    outdir = ensure_dir("data/trainees/mnist")
+    settingsfile = '%s/%s-settings.pkl' % (outdir,prefix)
+    quickdump(settingsfile,settings)
+    for setting in settings[index-1:]:
         print ('\n\n-------------------- %s-%d --------------------' % (prefix,index))
         print setting['model']
         print setting['train']
@@ -49,6 +56,8 @@ def main():
             save_trainee(snapshots,setting,prefix,index); 
             index += 1
 
+        garbage_collect(); memory_info(True)
+
     #####################################################
     
     close_logfile()
@@ -68,6 +77,11 @@ def report_callback(setting,snapshots,model,event,stats):
     # If event is epoch, save current test performance along with a snapshot of the weights
     snapshot = {}
     snapshot.update(stats)
+    for fold in ('train','valid','test'):  # remove the full-blown set of hidden activations because it makes
+        if stats[fold] != None:            # the dataset too huge on disk
+            snapshot[fold] = {}
+            snapshot[fold].update(stats[fold])
+            snapshot[fold].pop("H")
     snapshot["weights"] = [(as_numpy(W).copy(),as_numpy(b).copy()) for W,b in model.weights]
     snapshots.append(snapshot)
 
@@ -81,30 +95,62 @@ def save_trainee(snapshots,setting,prefix,index):
 
 ######################################################
 
+def make_train_settings(name):
+    return eval("make_train_settings_%s()" % name)
+
 def make_train_settings_basic():
 
     # model parameters to try
     model = Setting()
-    model.activation = [["logistic","softmax"],["tanh","softmax"]]
-    model.size     = [[25],
-                      [75],
-                      [225]]
+    model.activation = [["logistic","softmax"]]
+    model.size     = [[400]]
     model.dropout  = [None]
     model.maxnorm  = [None]
-    model.sparsity = [None,(5e-6,0.02),(5e-5,0.02)]
-    model.L1       = [None,1e-6,1e-4]
-    model.L2       = [None,1e-6]
+    model.sparsity = [None,(1e-6,1e-2),(1e-5,1e-2),(1e-4,1e-2),
+                      None,(1e-6,1e-3),(1e-5,1e-3),(1e-4,1e-2),
+                      None,(1e-6,1e-4),(1e-5,1e-4),(1e-4,1e-2)]
+    model.L1       = [None,1e-7,1e-5,5e-5,1e-4]
+    model.L2       = [None,1e-7,1e-5,5e-5,1e-4]
+    model.init_scale=[0.01,0.1]
 
     # training parameters to try
     train = Setting()
-    train.learn_rate       = [0.005,0.02]
-    train.learn_rate_decay = [0.985]
+    train.learn_rate       = [0.03,0.08,0.2,0.5]
+    train.learn_rate_decay = [0.99]
     train.momentum         = [0.75]
     train.momentum_range   = [[0,inf]]
-    train.batchsize        = [16,64,256]
+    train.batchsize        = [20,50,100]
     train.epochs           = [85]
 
     return { 'model' : model, 'train' : train }, "basic"
+
+def make_train_settings_basic2():
+
+    # model parameters to try
+    model = Setting()
+    model.activation = [["logistic","logistic","softmax"]]
+    model.size     = [[400,200]]
+    model.dropout  = [None]
+    model.maxnorm  = [None]
+    model.sparsity = [None,(1e-6,1e-2),(1e-5,1e-2),(1e-4,1e-2),
+                      None,(1e-6,1e-3),(1e-5,1e-3),(1e-4,1e-2),
+                      None,(1e-6,1e-4),(1e-5,1e-4),(1e-4,1e-2)]
+    model.L1       = [None,1e-7,1e-5,5e-5,1e-4]
+    model.L2       = [None,1e-7,1e-5,5e-5,1e-4]
+    model.init_scale=[0.01,0.1]
+
+    # training parameters to try
+    train = Setting()
+    train.learn_rate       = [0.03,0.08,0.2,0.5]
+    train.learn_rate_decay = [0.99]
+    train.momentum         = [0.75]
+    train.momentum_range   = [[0,inf]]
+    train.batchsize        = [20,50,100]
+    train.epochs           = [85]
+
+    return { 'model' : model, 'train' : train }, "basic2"
+
+
 
 ######################################################
 
@@ -165,13 +211,13 @@ def make_model(setting,Xshape,Yshape):
     # Make sure all the lists are the right length
     K = len(setting.activation) # hidden + output layers
     check_list_len('size',K-1)  # hidden layers only
-    for name in ('L1','L2','maxnorm','dropout','sparsity'):
+    for name in ('L1','L2','maxnorm','dropout','sparsity','init_scale'):
         check_list_len(name,K) 
 
     # If one of these settings is a scalar and not a list, then it means
     # we should apply it to all layers and it is a 'default' value
     defaults = {}
-    for name in ('L1','L2','maxnorm','dropout','sparsity'):
+    for name in ('L1','L2','maxnorm','dropout','sparsity','init_scale'):
         if not isinstance(setting[name],list):
             defaults[name] = setting[name]
 
@@ -183,7 +229,7 @@ def make_model(setting,Xshape,Yshape):
     for k in range(K-1):
         args = {}
         # For settings that have values defined for layers 1:K
-        for name in ('size','activation','L1','L2','maxnorm','sparsity'):
+        for name in ('size','activation','L1','L2','maxnorm','sparsity','init_scale'):
             if isinstance(setting[name],list):
                 args[name] = setting[name][k]
         if isinstance(setting.dropout,list):
@@ -192,7 +238,7 @@ def make_model(setting,Xshape,Yshape):
 
     # Finally, pull out the settings for the output layer
     output_args = { 'size' : Yshape }
-    for name in ('activation','L1','L2','maxnorm'):
+    for name in ('activation','L1','L2','maxnorm','init_scale'):
         if isinstance(setting[name],list):
             output_args[name] = setting[name][K-1]
     cfg.output(**output_args)
@@ -201,8 +247,6 @@ def make_model(setting,Xshape,Yshape):
 
 
 #######################################################
-
-set_backend("gnumpy")
 
 main()
 

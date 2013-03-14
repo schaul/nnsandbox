@@ -16,6 +16,7 @@ class BatchSet(object):
         self._batches[-1,-1] = m
 
     def __iter__(self):
+        self._index = 0
         return self
 
     def next(self):
@@ -26,9 +27,11 @@ class BatchSet(object):
         self._index += 1
         return batch
 
+    def __len__(self):
+        return len(self._batches)
+
     def shuffle(self):
         random.shuffle(self._batches)
-        self._index = 0
 
 class DataFold(object):
     '''
@@ -56,17 +59,23 @@ class DataSet(object):
     A simple structure containing three DataFold instances:
     a 'train', 'valid', and 'test.
     '''
-    def __init__(self,X,Y,Xshape=None,Yshape=None,Xrange=None,Yrange=None):
-        self._X = X
-        self._Y = Y
+    def __init__(self,X,Y,Xshape=None,Yshape=None,Xrange=None,Yrange=None,shuffle=True,max_batchsize=1):
+        if shuffle:
+            perm = random.permutation(X.shape[0])
+            X[:] = X[perm]
+            Y[:] = Y[perm]
+        self._X = bm.asarray(X)
+        self._Y = bm.asarray(Y)
         self._size  = X.shape[0]
+        self.max_batchsize = max_batchsize
         self.Xshape = Xshape or (1,X.shape[1])
         self.Yshape = Yshape or (1,Y.shape[1])
         self.Xdim   = X.shape[1]
         self.Ydim   = Y.shape[1]
-        self.Xrange = Xrange or (X.ravel().min(),X.ravel().max())
-        self.Yrange = Yrange or (Y.ravel().min(),Y.ravel().max())
-        self.train = DataFold(X[:,:],Y[:,:])
+        self.Xrange = Xrange or (X.min(axis=0),X.max(axis=0))
+        self.Yrange = Yrange or (Y.min(axis=0),Y.max(axis=0))
+        rs = self._rowslice(0,self._size)
+        self.train = DataFold(X[rs,:],Y[rs,:])
         self.valid = DataFold(X[0:0,:],Y[0:0,:])
         self.test  = DataFold(X[0:0,:],Y[0:0,:])
 
@@ -74,31 +83,34 @@ class DataSet(object):
     def values(self): return [self.train,self.valid,self.test]
     def items(self):  return zip(self.keys(),self.values())
 
+    def _rowslice(self,a,b):
+        # round endpoint down
+        b = a + self.max_batchsize *((b-a) // self.max_batchsize)
+        return slice(a,b)
+
     def __getitem__(self,key):
         if   key == 'train': return self.train
         elif key == 'valid': return self.valid
         elif key == 'test':  return self.test
         raise KeyError("invalid key for DataSet fold")
 
-    def shuffle(self):
-        perm = random.permutation(self._size)
-        self._X[:] = self._X[perm].copy()
-        self._Y[:] = self._Y[perm].copy()
-
     def split(self,trainsplit,validsplit=0,testsplit=0):
         assert(trainsplit + validsplit + testsplit <= 100)
         trainsize = int(trainsplit * self._size // 100)
         validsize = int(validsplit * self._size // 100)
         testsize  = int(testsplit  * self._size // 100)
-        self.train.X    = self._X[:trainsize]
-        self.train.Y    = self._Y[:trainsize]
-        self.train.size = trainsize
-        self.valid.X    = self._X[trainsize:trainsize+validsize]
-        self.valid.Y    = self._Y[trainsize:trainsize+validsize]
-        self.valid.size = validsize
-        self.test.X     = self._X[trainsize+validsize:trainsize+validsize+testsize]
-        self.test.Y     = self._Y[trainsize+validsize:trainsize+validsize+testsize]
-        self.test.size  = testsize
+        trs = self._rowslice(0,trainsize)
+        vas = self._rowslice(trainsize,trainsize+validsize) 
+        tes = self._rowslice(trainsize+validsize,trainsize+validsize+testsize) 
+        self.train.X    = self._X[trs,:]
+        self.train.Y    = self._Y[trs,:]
+        self.train.size = self.train.X.shape[0]
+        self.valid.X    = self._X[vas,:]
+        self.valid.Y    = self._Y[vas,:]
+        self.valid.size = self.valid.X.shape[0]
+        self.test.X     = self._X[tes,:]
+        self.test.Y     = self._Y[tes,:]
+        self.test.size  = self.test.X.shape[0]
 
     def rescale(self,Xrange,Yrange):
         '''
@@ -109,13 +121,13 @@ class DataSet(object):
         if Xrange != self.Xrange:
             for fold in self.values():
                 fold.X -= self.Xrange[0]
-                fold.X *= (Xrange[1]-Xrange[0])/(self.Xrange[1]-self.Xrange[0])
+                fold.X *= (Xrange[1]-Xrange[0])/maximum(1e-5,self.Xrange[1]-self.Xrange[0])
                 fold.X += Xrange[0]
             self.Xrange = Xrange
         if Yrange != self.Yrange:
             for fold in self.values():
                 fold.Y -= self.Yrange[0]
-                fold.Y *= (Yrange[1]-Yrange[0])/(self.Yrange[1]-self.Yrange[0])
+                fold.Y *= (Yrange[1]-Yrange[0])/maximum(1e-5,self.Yrange[1]-self.Yrange[0])
                 fold.Y += Yrange[0]
             self.Yrange = Yrange
 
@@ -155,11 +167,10 @@ def load_mnist(digits=range(10),split=[50,15,35],xform=[]):
 
 
 
-    X = bm.asarray(vstack(X))
-    Y = bm.asarray(vstack(Y))
+    X = vstack(X)
+    Y = vstack(Y)
     
-    data = DataSet(X,Y,Xshape=(28,28),Xrange=[0.0,255.0],Yrange=[0.0,1.0])
-    data.shuffle()
+    data = DataSet(X,Y,Xshape=(28,28),Xrange=[0.0,255.0],Yrange=[0.0,1.0],shuffle=True)
     data.split(*split)
     return data
     

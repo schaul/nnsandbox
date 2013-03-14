@@ -15,7 +15,7 @@ class NeuralNetCfg(object):
     Maxnorm is the maximum norm of the weights *entering* 
     each hidden unit of the layer, or None if no limit.
     '''
-    def __init__(self,L1=0.0,L2=0.0,maxnorm=None,dropout=None,sparsity=None):
+    def __init__(self,L1=0.0,L2=0.0,maxnorm=None,dropout=None,sparsity=None,init_scale=0.05):
         # These values (L1,L2,maxnorm,dropout) are the defaults for
         # all layers of this neural net, but can be overridden
         # for a specific layer via add_layer
@@ -24,6 +24,8 @@ class NeuralNetCfg(object):
         self.maxnorm = maxnorm
         self.dropout = dropout
         self.sparsity = sparsity
+        self.init_scale = init_scale
+        self.loss = None
         
         self._layers = [None,None]
 
@@ -32,23 +34,26 @@ class NeuralNetCfg(object):
         layer.dropout = dropout
         self._layers[0] = layer
 
-    def hidden(self,size,activation,L1=None,L2=None,maxnorm=None,dropout=None,sparsity=None):
+    def hidden(self,size,activation,L1=None,L2=None,maxnorm=None,dropout=None,sparsity=None,init_scale=None):
         layer = NeuralNetLayerCfg(size,activation)
         layer.L1 = L1
         layer.L2 = L2
         layer.maxnorm = maxnorm
         layer.dropout = dropout
         layer.sparsity = sparsity
+        layer.init_scale = init_scale
         self._layers.insert(-1,layer)
 
-    def output(self,size,activation,L1=None,L2=None,maxnorm=None):
+    def output(self,size,activation,L1=None,L2=None,maxnorm=None,init_scale=None,loss=None):
         layer = NeuralNetLayerCfg(size,activation)
         layer.L1 = L1
         layer.L2 = L2
         layer.maxnorm = maxnorm
         layer.dropout = None
         layer.sparsity = None
+        layer.init_scale = init_scale
         self._layers[-1] = layer
+        self.loss = loss
 
     def __len__(self):       return len(self._layers)
     def __iter__(self):      return self._layers.__iter__()
@@ -66,6 +71,7 @@ class NeuralNetCfg(object):
                 if layer.L2 == None:       layer.L2 = self.L2
                 if layer.maxnorm == None:  layer.maxnorm = self.maxnorm
                 if layer.sparsity == None: layer.sparsity = self.sparsity
+                if layer.init_scale == None: layer.init_scale = self.init_scale
                 if k < K:
                     if layer.dropout == None:  layer.dropout = self.dropout
         return self
@@ -98,6 +104,7 @@ class NeuralNetLayerCfg(object):
         self.maxnorm    = None
         self.dropout    = None
         self.sparsity   = None
+        self.init_scale = None
 
     def __repr__(self):  # Useful for printing 
         str = ''
@@ -123,14 +130,16 @@ class DenseWeights(object):
         *= scalar
         W,b = DenseWeights   (unpacks into ref to weights 'W' and ref to biases 'b')
     '''
-    def __init__(self,inlayer,outlayer,init_scale=0.0):
+    def __init__(self,inlayer,outlayer):
         self.inlayer  = inlayer
         self.outlayer = outlayer
 
         # Initialize to small random values uniformly centered around 0.0
         n,m = inlayer.size,outlayer.size
-        self.W = 2*init_scale*(rand(n,m)-0.5)
-        self.b = 2*init_scale*(rand(1,m)-0.5)
+        scale = outlayer.init_scale
+        scale *= 20/(n+1) ** 0.5
+        self.W = 2*scale*(rand(n,m)-0.5)
+        self.b = 2*scale*(rand(1,m)-0.5)
 
         self._tmp_W = None
 
@@ -183,9 +192,9 @@ class WeightSet(object):
         *= scalar
         len(WeightSet)
     '''
-    def __init__(self,cfg,init_scale=0.0):
+    def __init__(self,cfg):
         # For each pair of consecutive layers, create a dense set of weights between them
-        self._layers = [DenseWeights(cfg[k],cfg[k+1],init_scale)     for k in range(len(cfg)-1) ] if cfg else None
+        self._layers = [DenseWeights(cfg[k],cfg[k+1])     for k in range(len(cfg)-1) ] if cfg else None
 
     def copy(self):
         ws = WeightSet(None)
@@ -237,10 +246,9 @@ class NeuralNet(Model):
     '''
     def __init__(self,cfg):
         self._cfg = cfg.finalize()
-        Model.__init__(self,cfg[-1].f.ideal_loss())
+        Model.__init__(self,cfg.loss or cfg[-1].f.ideal_loss())
 
-        init_weight_scale = 0.005
-        self.weights = WeightSet(cfg,init_weight_scale)
+        self.weights = WeightSet(cfg)
 
         # Each _tmp_H[k] and _tmp_df[k] contains pre-allocated buffers for storing
         # information during forwardprop that is useful during backprop.
@@ -258,7 +266,12 @@ class NeuralNet(Model):
     def ideal_domain(self): return self._cfg[ 1].f.ideal_domain()   # first hidden layer's ideal domain
     def ideal_range(self):  return self._cfg[-1].f.ideal_range()    # output layer's ideal range
 
-    def make_weights(self,init_scale=0.0): return WeightSet(self._cfg,init_scale)
+    def make_weights(self): 
+        ws = WeightSet(self._cfg)
+        for layer in ws:
+            layer.W *= 0
+            layer.b *= 0
+        return ws
 
     def __call__(self,X):
         return self.eval(X)
@@ -268,11 +281,23 @@ class NeuralNet(Model):
         Given (m x n_0) matrix X, evaluate all m inputs on the neural network.
         The result is an (m x n_K) matrix of final outputs.
         '''
+        result = self._forwardprop_pass(X,want_hidden=want_hidden,want_grad=want_grad)
+        if self._has_dropout():
+            self._forwardprop_pass(X,want_hidden=want_hidden,want_grad=want_grad,dropout_pass=True)
+        return result
+
+    def _forwardprop_pass(self,X,want_hidden=False,want_grad=False,dropout_pass=False):
+        '''
+        Given (m x n_0) matrix X, evaluate all m inputs on the neural network.
+        The result is an (m x n_K) matrix of final outputs.
+        '''
         m,n = X.shape
         assert(m >= 1)
         assert(n == self._cfg[0].size)
-        H  = self._get_tmp(self._tmp_H ,m) if want_grad else [empty((m,layer.size)) for layer in self._cfg[1:]]
+
+        H  = self._get_tmp(self._tmp_H ,m)
         df = self._get_tmp(self._tmp_df,m) if want_grad else [None                  for layer in self._cfg[1:]]
+        
 
         # Forward pass, starting from earliest layer, storing all intermediate computations
         for k in range(self.numlayers()):
@@ -304,10 +329,10 @@ class NeuralNet(Model):
         H  = self._get_tmp(self._tmp_H)
         df = self._get_tmp(self._tmp_df)
         D  = self._get_tmp(self._tmp_D,Y.shape[0])  # D[k] is temporary storage for delta
-        R = self._get_tmp(self._tmp_R,Y.shape[0])   # R[k] is temporary storage for computing regularizer
+        R  = self._get_tmp(self._tmp_R,Y.shape[0]) if self._has_regularizer() else [None  for layer in self._cfg[1:]]
 
         # Calculate initial Delta based on loss function, outputs Z=H[-1] and targets Y
-        self._loss_delta(Y,H[-1],df[-1],out=D[-1])
+        self._loss_delta(H[-1],Y,df[-1],out=D[-1])
 
         # Backward pass
         for k in reversed(range(self.numlayers())):
@@ -337,12 +362,18 @@ class NeuralNet(Model):
 
 
     def apply_constraints(self):
-        self._normalize_weights()
+        self._constrain_weights()
+
+    def _has_dropout(self):
+        return [ bool(layer.dropout)  for layer in self._cfg ].count(True) > 0
+
 
     ############### REGULARIZER ###############
 
     def regularizer(self,H):
         '''Returns the sum of all regularization costs on hidden units (sparsity cost)'''
+        if not self._has_regularizer():
+            return 0.0
         R = self._get_tmp(self._tmp_R,H[0].shape[0])
         cost = 0.0
         for k in range(self.numlayers()):
@@ -369,19 +400,24 @@ class NeuralNet(Model):
         divide(Hk,Rk,out=Rk)
         iaddmul(Dk,Rk,lambd * 2. / Hk.shape[0])   # D += lambda * 2/m * H ./ (H.^2 + alpha^2)
 
+    def _has_regularizer(self):
+        return [bool(layer.sparsity) for layer in self._cfg].count(True) > 0
+
     ############### PENALTY ###############
 
     def penalty(self):
+        if not self._has_penalty():
+            return 0.0
         L1 = L2 = 0.0
         for layer in self.weights:
             if layer.outlayer.L1 > 0.0:
                 absW,_ = layer.get_tmp_W()
                 abs(layer.W,out=absW)
-                L1 += layer.outlayer.L1*as_numpy(sum(absW.ravel()))    # L1 * sum(abs(W))
+                L1 += layer.outlayer.L1*as_numpy(sum(absW.ravel()))     # L1 * sum(abs(W))
             if layer.outlayer.L2 > 0.0:
                 sqrW,_ = layer.get_tmp_W()
                 square(layer.W,out=sqrW)
-                L2 += layer.outlayer.L2*0.5*as_numpy(sum(sqrW.ravel()))   # L2 * 0.5 * sum(W.^2)
+                L2 += layer.outlayer.L2*0.5*as_numpy(sum(sqrW.ravel())) # L2 * 0.5 * sum(W.^2)
         return L1 + L2
 
     def _penalty_grad(self,layer,dW):
@@ -394,24 +430,16 @@ class NeuralNet(Model):
             multiply(layer.W,layer.outlayer.L2,out=W)
             iadd(dW,W)                           # dW += L2 * W
 
+    def _has_penalty(self):
+        return [bool(layer.L1) or bool(layer.L2) for layer in self._cfg].count(True) > 0
+
     ###################### UTILITY FUNCTIONS ######################
 
-    def _normalize_weights(self):
-        for layer in self.weights:
-            if layer.outlayer.maxnorm:
-                # Get tmp matrix the same size as this layer's incoming weight matrix
-                W,w = layer.get_tmp_W()
-                
-                # Compute the square of the norm of weights entering each destination unit (norm along rows)
-                square(weights.W,out=W)
-                sum(W,axis=0,out=w)
-
-                # Make sure all norms <= maxnorm have no effect
-                maximum(w,outlayer.maxnorm**2,out=w)
-
-                # Divide each W[i,j] > maxnorm by its actual norm
-                sqrt(w,out=w)
-                weights.W /= w
+    def _constrain_weights(self):
+        for weights in self.weights:
+            if weights.outlayer.maxnorm:
+                # Normalize each column in the weight matrix, only if its magnitude is > maxnorm
+                clip_norm(weights.W,axis=0,maxnorm=weights.outlayer.maxnorm,temp_mem=list(weights.get_tmp_W()))
 
 
     def _get_tmp(self,temp_list,m=-1):

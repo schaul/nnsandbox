@@ -1,5 +1,5 @@
 from Report import *
-from BigMat import sync_backend
+from BigMat import sync_backend,garbage_collect,memory_info
 
 class TrainingRun(object):
     '''
@@ -8,11 +8,12 @@ class TrainingRun(object):
     def __init__(self,model,data,report_args={},
                  learn_rate=1.0,learn_rate_decay=.98,
                  momentum=0.0,momentum_range=[0,inf],
-                 batchsize=32,epochs=100):
+                 batchsize=32,epochs=10000):
         
         self.model = model
         self.data  = data
 
+        self.learn_rate_max   = learn_rate
         self.learn_rate       = learn_rate
         self.learn_rate_decay = learn_rate_decay
         self.momentum         = 0.0
@@ -24,7 +25,7 @@ class TrainingRun(object):
 
         # wstep is pre-allocated memory for storing gradient matrices
         self.wstep      = model.make_weights()
-        self.wstep_prev = model.make_weights()
+        self.wstep_prev = model.make_weights() if momentum else None
         self.epoch = 0
        
         if report_args['verbose']: self.log = TrainingReport(self,**report_args) 
@@ -43,7 +44,7 @@ class TrainingRun(object):
         # Outer loop over epochs
         last_epoch = self.epochs if epochs_this_call == None else (self.epoch+epochs_this_call)
         for self.epoch in xrange(self.epoch+1,last_epoch+1):
-            self.batches.shuffle()
+            #self.batches.shuffle()
 
             # Compute momentum for this epoch
             self.momentum = self.momentum_max if (self.epoch >= self.momentum_range[0] and self.epoch < self.momentum_range[1]) else 0.0
@@ -63,14 +64,15 @@ class TrainingRun(object):
                     wstep *= -self.learn_rate
                     wstep += wstep_prev
                     weights += wstep
+                    wstep,wstep_prev = wstep_prev,wstep  # move wstep into wstep_prev by swapping arrays
                 else:
                     weights.step_by(wstep,alpha=-self.learn_rate)
 
-                # Remember the step we just took, for momentum in the next iteration
-                wstep,wstep_prev = wstep_prev,wstep  # move wstep into wstep_prev by swapping arrays
-
                 # Apply any model constraints, like norm of weights
                 model.apply_constraints()
+
+            if self.learn_rate < self.learn_rate_max/50.:
+                break
 
             self.learn_rate *= self.learn_rate_decay
             self.log('epoch')
