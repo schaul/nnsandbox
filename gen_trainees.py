@@ -17,7 +17,7 @@ def main():
                     'log_mode'  : 'html_anim' }
 
     data = load_mnist(digits=[5,6,8,9],
-                      split=[30,10,0])
+                      split=[20,5,0])
 
     settings_name = "basic2"
 
@@ -27,11 +27,12 @@ def main():
     #
     settings,prefix = make_train_settings(settings_name)
     settings = enumerate_settings(settings)
-    index = 320
-    num_restarts = 1  # How many random restarts do we try with the same parameters
+    index = 1
+    num_restarts = 2  # How many random restarts do we try with the same parameters
 
     open_logfile("gen_trainees-%s" % prefix,"%d total variants; %d restarts each" % (len(settings),num_restarts))
-    outdir = ensure_dir("data/trainees/mnist")
+    #outdir = ensure_dir("data/trainees/mnist")
+    outdir = ensure_dir("C:/Users/Andrew/Dropbox/share/tom/data/trainees/mnist")
     settingsfile = '%s/%s-settings.pkl' % (outdir,prefix)
     quickdump(settingsfile,settings)
     for setting in settings[index-1:]:
@@ -56,7 +57,7 @@ def main():
             save_trainee(snapshots,setting,prefix,index); 
             index += 1
 
-        garbage_collect(); memory_info(True)
+        print memory_info(gc=True)
 
     #####################################################
     
@@ -118,7 +119,6 @@ def make_train_settings_basic():
     train.learn_rate       = [0.03,0.08,0.2,0.5]
     train.learn_rate_decay = [0.99]
     train.momentum         = [0.75]
-    train.momentum_range   = [[0,inf]]
     train.batchsize        = [20,50,100]
     train.epochs           = [85]
 
@@ -129,24 +129,23 @@ def make_train_settings_basic2():
     # model parameters to try
     model = Setting()
     model.activation = [["logistic","logistic","softmax"]]
-    model.size     = [[400,200]]
-    model.dropout  = [None]
-    model.maxnorm  = [None]
-    model.sparsity = [None,(1e-6,1e-2),(1e-5,1e-2),(1e-4,1e-2),
-                      None,(1e-6,1e-3),(1e-5,1e-3),(1e-4,1e-2),
-                      None,(1e-6,1e-4),(1e-5,1e-4),(1e-4,1e-2)]
-    model.L1       = [None,1e-7,1e-5,5e-5,1e-4]
-    model.L2       = [None,1e-7,1e-5,5e-5,1e-4]
-    model.init_scale=[0.01,0.1]
+    model.size     = [[200,200]]
+    model.dropout  = [None,[0.0,0.2,0.0],[0.2,0.5,0.5],[0.2,0.5,0.1]]
+    model.maxnorm  = [None,2.0,4.0]
+    model.sparsity = [None,(5e-6,1e-2),(1e-4,1e-2),
+                      None,(5e-6,1e-3),(1e-4,1e-3)]
+    model.L1       = [None,1e-7,1e-6,5e-5]
+    model.L2       = [None,1e-7,1e-6,5e-5]
+    model.init_scale=[0.02]
 
     # training parameters to try
     train = Setting()
-    train.learn_rate       = [0.03,0.08,0.2,0.5]
+    train.learn_rate       = [0.2,0.5,2.0,5.0]
     train.learn_rate_decay = [0.99]
     train.momentum         = [0.75]
-    train.momentum_range   = [[0,inf]]
-    train.batchsize        = [20,50,100]
+    train.batchsize        = [100]
     train.epochs           = [85]
+
 
     return { 'model' : model, 'train' : train }, "basic2"
 

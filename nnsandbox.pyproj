@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{863d67d8-c884-45e5-9fde-459993a0fad9}</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>test_mnist.py</StartupFile>
+    <StartupFile>gen_trainees.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>

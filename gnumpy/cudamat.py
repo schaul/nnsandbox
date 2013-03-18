@@ -56,10 +56,11 @@ _cudamat.apply_log_1_plus_exp.restype = ct.c_int
 _cudamat.apply_log.restype = ct.c_int
 _cudamat.apply_exp.restype = ct.c_int
 _cudamat.apply_sqrt.restype = ct.c_int
-_cudamat.square.restype = ct.c_int
 _cudamat.apply_pow.restype = ct.c_int
 _cudamat.apply_pow_matrix.restype = ct.c_int
 _cudamat.reciprocal.restype = ct.c_int
+_cudamat.square.restype = ct.c_int
+_cudamat.dropout.restype = ct.c_int
 
 _cudamat.add_elementwise.restype = ct.c_int
 _cudamat.subtract_elementwise.restype = ct.c_int
@@ -1064,9 +1065,7 @@ def pow(mat, p, target = None):
 
 def square(mat, target = None):
     """
-    If p is a scalar, compute the 'p'th power of each element of the matrix mat,
-    otherwise raise each element of the matrix mat to the power given by the
-    corresponding element of the matrix p.
+    Square each element of the matrix mat.
     """
 
     if not target:
@@ -1078,6 +1077,31 @@ def square(mat, target = None):
         raise generate_exception(err_code)
 
     return target
+
+def dropout(matA, matB, dropout_rate, targetA = None, targetB = None):
+    """
+    Set each element of mat to zero, independently, with probability "dropout_rate".
+    """
+
+    if not targetA:
+        targetA = matA
+
+    if not targetB:
+        targetB = matB
+
+    if matB != None:
+        err_code = _cudamat.dropout(CUDAMatrix.rnd_state_p, 
+                                    matA.p_mat, matB.p_mat,
+                                    ct.c_float(dropout_rate), 
+                                    targetA.p_mat,targetB.p_mat)
+    else:
+        err_code = _cudamat.dropout(CUDAMatrix.rnd_state_p, 
+                                    matA.p_mat, None,
+                                    ct.c_float(dropout_rate), 
+                                    targetA.p_mat,None)
+
+    if err_code:
+        raise generate_exception(err_code)
 
 def cuda_sync_threads():
     _cudamat.cuda_sync_threads()

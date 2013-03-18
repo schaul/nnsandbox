@@ -529,3 +529,25 @@ __global__ void kSetSelectedRows(float* target, float* source, float* indices, i
             target[targetRowI * nCols + colI] = targetRowI==-1 ? (1.0/0.0 -1.0/0.0) : source[sourceRowI * nCols + colI];
     }
 }
+
+__global__ void kDropout(unsigned int* rndMults, unsigned long long* rndWords, float* matA, float* matB, float rate, float* targetA, float* targetB, unsigned int len) {
+    const unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned long long rndWord = rndWords[idx];
+    const unsigned int rndMult = rndMults[idx];
+
+    #pragma unroll
+    for(unsigned int i = idx; i < len; i += NUM_RND_STREAMS) {
+        rndWord = rndMult * LOW_BITS(rndWord) + HIGH_BITS(rndWord);
+        float trial = (__uint2float_rn(LOW_BITS(rndWord)) + 1.0f) / 4294967296.0f;
+        if (trial < rate) {
+            targetB[i] = 0.0f;
+            targetA[i] = 0.0f;
+        } else {
+            targetB[i] = matB[i];
+            targetA[i] = matA[i];
+        }
+    }
+    rndWords[idx] = rndWord;
+}
+
+

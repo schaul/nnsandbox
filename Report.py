@@ -25,7 +25,7 @@ import Tkinter as Tk
 _curr_logfile = None
 _num_logfile_entries = 0
 _best_logfile_errors = {}
-_logs_dir = "logs"
+_logs_dir = "C:/Users/Andrew/Dropbox/share/tom/logs"
 
 def open_logfile(prefix='train',msg=""):
     global _curr_logfile
@@ -243,11 +243,11 @@ class TrainingReport(object):
             # Insert an image or an animation, and close the outer-most DIV element
             if len(self._screenshots) > 0:
                 thumbfile = self._screenshots[-1]
-                thumburl = os.path.join(*(thumbfile.split('/')[1:]))
+                thumburl = "/".join(thumbfile.split('/')[-2:])
                 animurl  = thumburl
                 if len(self._screenshots) > 1:
                     animfile = os.path.splitext(thumbfile)[0] + '-anim.gif'
-                    animurl = os.path.join(*(animfile.split('/')[1:]))
+                    animurl = "/".join(animfile.split('/')[-2:])
                     inputs = os.path.split(thumbfile)[0] + '/img-%05d-%%02d.png[0-%d]' % (_num_logfile_entries,len(self._screenshots)-1)
                     os.system('convert -delay 30 -coalesce -layers optimize ' + inputs + ' ' + animfile)
 
@@ -292,10 +292,14 @@ class TrainingReportWindow(Tk.Frame):
         self.master.columnconfigure(2,weight=1)
         dpi = 80.0
         self.plots = {}
-        col0_wd = 320
-        col1_wd = 870
-        row0_ht = 400
-        row1_ht = 220
+        #col0_wd = 320
+        #col1_wd = 870
+        #row0_ht = 400
+        #row1_ht = 220
+        col0_wd = 300
+        col1_wd = 300
+        row0_ht = 200
+        row1_ht = 100
 
         # Add error plot in top-left cell
         self.plots["errors"] = TrainingReportErrorPlot(self.master,(col0_wd,row0_ht),dpi,trainer.task())
@@ -314,15 +318,15 @@ class TrainingReportWindow(Tk.Frame):
         # *Weight* statistics in bottom-left cell
         get_weightmats = lambda event,stats: [bm.as_numpy(abs(layer.W)) for layer in trainer.model.weights]
         weight_percentiles =  list(100*(1-linspace(0.1,.9,10)**1.5))
-        self.plots["wstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_weightmats,weight_percentiles,title="W")
+        self.plots["wstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_weightmats,weight_percentiles,True,title="W")
         self.plots["wstats"].canvas.get_tk_widget().grid(row=1,column=0,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
         # *Hidden activity* statistics in bottom-right cell
         get_hidden = lambda event,stats: stats["train"]["H"]
         hidden_percentiles =  list(100*(1-linspace(0.1,.9,10)**1.5))
         ranges = [layer.f.actual_range() for layer in trainer.model._cfg[1:]]
-        self.plots["hstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_hidden,hidden_percentiles,ranges=ranges,title="H")
-        self.plots["hstats"].canvas.get_tk_widget().grid(row=2,column=0,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
+        self.plots["hstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_hidden,hidden_percentiles,False,ranges=ranges,title="H")
+        self.plots["hstats"].canvas.get_tk_widget().grid(row=1,column=1,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
         # For problems with 2D output, draw the target and the reconstruction side by side
         if trainer.data.Yshape[0] > 1 and trainer.data.Yshape[1]:
@@ -366,10 +370,11 @@ class TrainingReportWindow(Tk.Frame):
         pnames = ('errors','feat_in','feat_out','wstats','hstats')
         fnames = []
         for pname in pnames:
-            fnames.append(tempname % pname)
-            plot = self.plots[pname]
-            plot.redraw()
-            plot.savefig(fnames[-1],dpi=80)
+            if self.plots.has_key(pname):
+                fnames.append(tempname % pname)
+                plot = self.plots[pname]
+                plot.redraw()
+                plot.savefig(fnames[-1],dpi=80)
 
         # Then use ImageMagick to put them together again
         cmd = 'montage'
@@ -480,7 +485,7 @@ class TrainingReportFeatureGrid(Figure):
         self._feat  = W # col[i] contains weights entering unit i in first hidden layer
         self._featrange = (min(W.ravel()),max(W.ravel()))
         self._dirty = True
-        if event == 'epoch' and self._sorted and self._ordering == None:
+        if event == 'epoch' and self._sorted and (stats['epoch'] < 5):
             # Sort by decreasing L2 norm
             ranks = [-sum(self._feat[:,:,j].ravel()**2) for j in range(self._feat.shape[2])]
             self._ordering = argsort(ranks)
@@ -520,7 +525,7 @@ class TrainingReportFeatureGrid(Figure):
 
 class TrainingReportPercentiles(Figure):
 
-    def __init__(self,master,size,dpi,get_matrices_fn,percentiles,ranges=None,title=""):
+    def __init__(self,master,size,dpi,get_matrices_fn,percentiles,transposed,ranges=None,title=""):
         Figure.__init__(self,figsize=(size[0]/dpi,size[1]/dpi),dpi=dpi,facecolor='w',edgecolor='b',frameon=True,linewidth=0)
         FigureCanvas(self,master=master)
         self.master = master
@@ -530,13 +535,16 @@ class TrainingReportPercentiles(Figure):
         self._t = percentiles
         self._ranges = ranges
         self._title = title
+        self._transposed = transposed
         self.add_subplot(111,axisbg='w')
         
     def log(self,event,stats):
         self._P = []
         matrices = self._get_matrices_fn(event,stats)
         for A in matrices:
-            P = make_matrix_percentiles(A.transpose(),self._t)  # percentiles over rows first, then percentiles over those last
+            if self._transposed:
+                A = A.transpose()
+            P = make_matrix_percentiles(A,self._t)  # percentiles over rows first, then percentiles over those last
             self._P.append(P)
         self._dirty = True
 
@@ -594,7 +602,7 @@ class TrainingReportReconstructGrid(Figure):
         self.master = master
         self._dirty = True
         self._fold = "test" if data["test"].size > 0 else "train"
-        self._indices = rnd.sample(arange(data[self._fold].size),minimum(data[self._fold].size,256))
+        self._indices = rnd.sample(arange(data[self._fold].size),minimum(data[self._fold].size,50))#256))
         self._targets = bm.as_numpy(data[self._fold].Y[self._indices,:]).transpose().reshape(data.Yshape + tuple([len(self._indices)]))
         self._outputs = None
         self._outshape = data.Yshape

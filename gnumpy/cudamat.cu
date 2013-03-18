@@ -1241,4 +1241,35 @@ DLLEXP extern int setSelectedRows(cudamat* target, cudamat* source, cudamat* ind
         return 0;
 }
 
+DLLEXP extern int dropout(rnd_struct* rnd_state, cudamat* matA, cudamat* matB, float rate,
+                          cudamat* targetA, cudamat* targetB) {
+    unsigned int len = matA->size[0] * matA->size[1];
+
+    if (!matA->on_device || !targetA->on_device)
+        return ERROR_NOT_ON_DEVICE;
+
+    if (matA->size[0] != targetA->size[0] || matA->size[1] != targetA->size[1])
+        return ERROR_INCOMPATIBLE_DIMENSIONS;
+    
+	if (matB) {
+		if (!matB->on_device || !targetB->on_device)
+			return ERROR_NOT_ON_DEVICE;
+		if (matB->size[0] != targetB->size[0] || matB->size[1] != targetB->size[1])
+			return ERROR_INCOMPATIBLE_DIMENSIONS;
+		if (matA->size[0] != matB->size[0] || matA->size[1] != matB->size[1])
+			return ERROR_INCOMPATIBLE_DIMENSIONS;
+	}
+
+    kDropout<<<NUM_RND_BLOCKS,NUM_RND_THREADS_PER_BLOCK>>>(rnd_state->dev_mults, rnd_state->dev_words, 
+              matA->data_device, (matB ? matB : matA)->data_device, rate,
+              targetA->data_device, (targetB ? targetB : targetA)->data_device, len);
+
+    CUDA_THREAD_SYNC();
+
+    if (checkCUDAError())
+        return CUDA_ERROR;
+
+    return 0;
+}
+
 }

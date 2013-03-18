@@ -44,6 +44,9 @@ class NumpyBackend(object):
     def rand(*shape):    return np.array(np.random.rand(*shape),default_dtype)
 
     @staticmethod
+    def randn(*shape):   return np.array(np.random.randn(*shape),default_dtype)
+
+    @staticmethod
     def array(A):        return np.array(A,default_dtype)
 
     @staticmethod
@@ -152,6 +155,15 @@ class NumpyBackend(object):
         t *= maxnorm
         np.multiply(A,t,out=A)
 
+    @staticmethod
+    def dropout(A,B,rate,outA,outB):
+        if outA == None: outA = A
+        if outB == None: outB = B
+        mask = np.random.binomial(1,rate,A.shape)
+        multiply(A,mask,out=outA)
+        if B != None:
+            multiply(B,mask,out=outB)
+
 #############################################
 
 class GnumpyBackend(object):
@@ -167,6 +179,9 @@ class GnumpyBackend(object):
 
     @staticmethod
     def rand(*shape):    return gp.rand(*shape)
+
+    @staticmethod
+    def randn(*shape):   return gp.randn(*shape)
 
     @staticmethod
     def array(A):        return gp.garray(A)
@@ -366,6 +381,19 @@ class GnumpyBackend(object):
         # Rescale any W[:,j] to have norm at most maxnorm 
         A._base_shaped(1).mult_by_col_rsqrt(t._base_shaped(1),maxnorm,target=A._base_shaped(1))
 
+    @staticmethod
+    def dropout(A,B,rate,outA,outB):
+        if outA == None: outA = A
+        if outB == None: outB = B
+        if B != None:
+            cudamat.dropout(A._base_shaped(1),B._base_shaped(1),rate,
+                            targetA=outA._base_shaped(1),
+                            targetB=outB._base_shaped(1))
+        else:
+            cudamat.dropout(A._base_shaped(1),None,rate,
+                            targetA=outA._base_shaped(1),
+                            targetB=None)
+
 
 ###############################################################
 # Provide versions of numpy/gnumpy functions with "out" arguments
@@ -383,6 +411,7 @@ def empty(shape):          return backend.empty(shape)
 def zeros(shape):          return backend.zeros(shape)
 def ones(shape):           return backend.ones(shape)
 def rand(*shape):          return backend.rand(*shape)
+def randn(*shape):         return backend.randn(*shape)
 def array(A):              return backend.array(A)         # new copy of A
 def asarray(A):            return backend.asarray(A)       # new *view* of A
 def as_numpy(A):           return backend.as_numpy(A)
@@ -411,7 +440,7 @@ def idiv(A,B):             return backend.idiv(A,B)          # A /= B
 def reciprocal(A,out=None):return backend.reciprocal(A,out)  # 1. / A 
 def maximum(A,B,out=None): return backend.maximum(A,B,out)
 def clip_norm(A,axis=0,maxnorm=0.0,temp_mem=None): return backend.clip_norm(A,axis,maxnorm,temp_mem)   # A[:,i] ./= max(eps,sum(A[:,i]**2))
-
+def dropout(A,B,rate,outA=None,outB=None): return backend.dropout(A,B,rate,outA,outB)
 
 ###################################################
 

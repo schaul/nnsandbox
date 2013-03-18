@@ -12,17 +12,18 @@ def main():
     # Load MNIST dataset
     tic()
     data = load_mnist(digits=range(10),
-                      split=[70,15,15],
+                      split=[85,0,15],
                       #split=[30,0,0]   # for faster training when debugging
                       )
     print ("Data loaded in %.1fs" % toc())
 
     ######################################################
     # Create a neural network with matching input/output dimensions
-    cfg = NeuralNetCfg(L1=1e-7,init_scale=0.01)
-    cfg.input(data.Xshape)
-    cfg.hidden(1000,"logistic",maxnorm=2.0)
-    cfg.output(data.Yshape,"softmax")
+    cfg = NeuralNetCfg(L1=1e-7*0,init_scale=0.1**2)
+    cfg.input(data.Xshape,dropout=0.2)
+    cfg.hidden(800,"logistic",dropout=0.5,maxnorm=4.0,sparsity=[0.00001,0.001])
+    cfg.hidden(800,"logistic",dropout=0.5,maxnorm=4.0,sparsity=[0.00001,0.001])
+    cfg.output(data.Yshape,"softmax",maxnorm=4.0)
 
     model = NeuralNet(cfg)
 
@@ -37,13 +38,13 @@ def main():
                     'visualize' : True}
 
     trainer = TrainingRun(model,data,report_args,
-                          learn_rate=.02,
-                          learn_rate_decay=.995,
-                          momentum=0.9,momentum_range=[0,1000],
+                          learn_rate=10,
+                          learn_rate_decay=.998,
+                          momentum=[(1,.5),(400,0.99)],
                           batchsize=128)
 
     tic()
-    trainer.train(1000)
+    trainer.train(3000)
     print ("Training took %.1fs" % toc())
 
     #####################################################

@@ -67,4 +67,5 @@ __global__ void kDivideScalar(float* mat, float alpha, float* dest, unsigned int
 __global__ void kAddScalar(float* a, float alpha, float* dest, unsigned int numEls);
 __global__ void kSelectRows(float* source, float* target, float* indices, int nRowIs, int nCols, int nSourceRows);
 __global__ void kSetSelectedRows(float* target, float* source, float* indices, int nRowIs, int nCols, int nTargetRows);
+__global__ void kDropout(unsigned int* randMults, unsigned long long* randWords, float* matA, float* matB, float rate, float* targetA, float* targetB, unsigned int len);
 #endif

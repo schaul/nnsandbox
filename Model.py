@@ -44,19 +44,6 @@ class Model(object):
         c = l+r+p
         return c,l,r,p
 
-    def grad(self,data,out=None):
-        '''
-        Given a particular model, and particular data, compute the gradient of this cost 
-        function with respect to the model's weight parameters. If 'out' is specified, it
-        should refer to a pre-allocated WeightSet object; otherwise a new one will be returned.
-        '''
-        # Ask forward prop to cache values needed for a subsequent backprop() call
-        self.eval(data.X,want_grad=True)
-
-        # Backpropagate the error signal Delta through the network, 
-        # producing gradients w.r.t. weight matrices for each layer.
-        return self.backprop(data.X,data.Y,out=out)
-
     def apply_constraints(self):
         pass
 

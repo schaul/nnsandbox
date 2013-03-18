@@ -32,7 +32,7 @@ class ActivationLinear(Activation):
 class ActivationLogistic(Activation):
     '''Activation function sigmoid(A), i.e. logisitic function'''
     def name(self):         return "logistic"
-    def ideal_domain(self): return [-0.1,1.1]
+    def ideal_domain(self): return [ 0.0,1.0]
     def ideal_range(self):  return [ 0.1,0.9]
     def actual_range(self): return [ 0.0,1.0]
 
@@ -55,7 +55,7 @@ class ActivationTanh(Activation):
 
     def __call__(self,A,out=None,dout=None):
         if out == None:
-            return tanhx(A)
+            return tanh(A)
         tanh(A,out=out)
         if dout != None:
             square(out,out=dout)
