@@ -6,18 +6,22 @@ from Report import open_logfile,close_logfile
 from BigMat import garbage_collect
 import itertools
 
+outdir = ensure_dir("data/trainees/mnist")
+#outdir = ensure_dir("C:/Users/Andrew/Dropbox/share/tom/data/trainees/mnist")
+
 def main():
+    global outdir
 
     set_backend("gnumpy")
     
     report_args = { 'verbose'   : True,
-                    'interval'  : 1,       # how many epochs between progress reports (larger is faster)
-                    'interval_rate' : 1.45,
+                    'interval'  : 3,       # how many epochs between progress reports (larger is faster)
+                    'interval_rate' : 1.35,
                     'visualize' : True,
                     'log_mode'  : 'html_anim' }
 
     data = load_mnist(digits=[5,6,8,9],
-                      split=[20,5,0])
+                      split=[30,10,0])
 
     settings_name = "basic2"
 
@@ -27,15 +31,15 @@ def main():
     #
     settings,prefix = make_train_settings(settings_name)
     settings = enumerate_settings(settings)
-    index = 1
-    num_restarts = 2  # How many random restarts do we try with the same parameters
+    index = 801
+    index_end = 1000
+    settings = settings[index-1:index_end]
+    num_restarts = 1  # How many random restarts do we try with the same parameters
 
     open_logfile("gen_trainees-%s" % prefix,"%d total variants; %d restarts each" % (len(settings),num_restarts))
-    #outdir = ensure_dir("data/trainees/mnist")
-    outdir = ensure_dir("C:/Users/Andrew/Dropbox/share/tom/data/trainees/mnist")
     settingsfile = '%s/%s-settings.pkl' % (outdir,prefix)
     quickdump(settingsfile,settings)
-    for setting in settings[index-1:]:
+    for setting in settings:
         print ('\n\n-------------------- %s-%d --------------------' % (prefix,index))
         print setting['model']
         print setting['train']
@@ -52,12 +56,11 @@ def main():
             # Train the model
             trainer = TrainingRun(model,data,report_args,**setting['train'])
             trainer.train()
+            trainer = None # force gc on any Tk window objects
 
             # Save the training run to disk
             save_trainee(snapshots,setting,prefix,index); 
             index += 1
-
-        print memory_info(gc=True)
 
     #####################################################
     
@@ -87,7 +90,7 @@ def report_callback(setting,snapshots,model,event,stats):
     snapshots.append(snapshot)
 
 def save_trainee(snapshots,setting,prefix,index):
-    outdir = ensure_dir("data/trainees/mnist")
+    global outdir
     filename = '%s/%s-%05i.pkl' % (outdir,prefix,index)
     trainee = { 'setting'  : setting,
                 'snapshots': snapshots }
@@ -129,25 +132,25 @@ def make_train_settings_basic2():
     # model parameters to try
     model = Setting()
     model.activation = [["logistic","logistic","softmax"]]
-    model.size     = [[200,200]]
-    model.dropout  = [None,[0.0,0.2,0.0],[0.2,0.5,0.5],[0.2,0.5,0.1]]
-    model.maxnorm  = [None,2.0,4.0]
-    model.sparsity = [None,(5e-6,1e-2),(1e-4,1e-2),
-                      None,(5e-6,1e-3),(1e-4,1e-3)]
+    model.size     = [[100,100]]
+    model.dropout  = [None,[0.0,0.2,0.0],[0.2,0.5,0.5],[0.2,0.5,0.0]]
+    model.maxnorm  = [None,4.0]
+    model.sparsity = [None,(1e-5,1e-2),(1e-4,1e-2),
+                      None,(1e-5,1e-3),(1e-4,1e-3)]
     model.L1       = [None,1e-7,1e-6,5e-5]
     model.L2       = [None,1e-7,1e-6,5e-5]
-    model.init_scale=[0.02]
+    model.init_scale=[0.01,0.05,0.10]
 
     # training parameters to try
     train = Setting()
     train.learn_rate       = [0.2,0.5,2.0,5.0]
-    train.learn_rate_decay = [0.99]
-    train.momentum         = [0.75]
-    train.batchsize        = [100]
-    train.epochs           = [85]
+    train.learn_rate_decay = [.995,0.985]
+    train.momentum         = [0.5]
+    train.batchsize        = [128]
+    train.epochs           = [113]
 
 
-    return { 'model' : model, 'train' : train }, "basic2"
+    return { 'model' : model, 'train' : train }, "basic-s100-s100"
 
 
 

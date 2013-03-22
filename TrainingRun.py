@@ -29,7 +29,6 @@ class TrainingRun(object):
         if report_args['verbose']: self.log = TrainingReport(self,**report_args) 
         else:                      self.log = lambda event: 0  # do nothing
 
-
     def train(self,epochs_this_call=None):
         '''
         Train the current model up the the maximum number of epochs.
@@ -51,8 +50,7 @@ class TrainingRun(object):
             for batch in self.batches:
                 # Add Nesterov look-ahead momentum, before computing gradient
                 if self.momentum:
-                    wstep_prev *= self.momentum
-                    weights += wstep_prev
+                    weights.step_by(wstep_prev,self.momentum)
 
                 # Compute gradient, storing it in wstep
                 model.grad(batch,out=wstep)
@@ -60,7 +58,6 @@ class TrainingRun(object):
                 if self.momentum:
                     # Add momentum to the step, then adjust the weights
                     wstep *= -self.learn_rate*(1-self.momentum)
-                    wstep += wstep_prev
                     weights += wstep
                     wstep,wstep_prev = wstep_prev,wstep  # move wstep into wstep_prev by swapping arrays
                 else:
@@ -96,7 +93,6 @@ class TrainingRun(object):
                 t = float(self.epoch - epoch0) / (epoch1 - epoch0)
                 self.momentum = m0 + t*(m1-m0)
                 return
-
 
     def task(self):
         if self.model._loss_type == "nll":

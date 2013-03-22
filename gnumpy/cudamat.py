@@ -5,8 +5,7 @@ import numpy as np
 MAX_ONES = 1024*256
 
 dllext = 'dll' if platform.system() == 'Windows' else 'so'
-#dllpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),'libcudamat.%s' % dllext)
-dllpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),'libcudamat_nosync.%s' % dllext)
+dllpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),'libcudamat.%s' % dllext)
 
 _cudamat = ct.cdll.LoadLibrary(dllpath)
 

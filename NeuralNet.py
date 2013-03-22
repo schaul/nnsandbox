@@ -130,19 +130,23 @@ class DenseWeights(object):
         *= scalar
         W,b = DenseWeights   (unpacks into ref to weights 'W' and ref to biases 'b')
     '''
-    def __init__(self,inlayer,outlayer):
+    def __init__(self,inlayer,outlayer,mem=None):
         self.inlayer  = inlayer
         self.outlayer = outlayer
 
         # Initialize to small random values uniformly centered around 0.0
         n,m = inlayer.size,outlayer.size
         scale = outlayer.init_scale
-        #scale *= 20/(n+1) ** 0.5
-        #self.W = 2*scale*(rand(n,m)-0.5)
-        #self.b = 2*scale*(rand(1,m)-0.5)
-
-        self.W = scale*randn(n,m)
-        self.b = scale*randn(1,m)
+        
+        # Make W and b views into the memory
+        if mem != None:
+            self.W = mem[:n*m].reshape((n,m))
+            self.b = mem[n*m:].reshape((1,m))
+        else:
+            self.W = empty((n,m))
+            self.b = empty((1,m))
+        fill_randn(self.W); imul(self.W,scale)
+        fill_randn(self.b); imul(self.b,scale)
 
         self._tmp_W = None
 
@@ -196,8 +200,18 @@ class WeightSet(object):
         len(WeightSet)
     '''
     def __init__(self,cfg):
-        # For each pair of consecutive layers, create a dense set of weights between them
-        self._layers = [DenseWeights(cfg[k],cfg[k+1])     for k in range(len(cfg)-1) ] if cfg else None
+        if cfg:
+            # For each pair of consecutive layers, create a dense set of weights between them
+            # Pre-allocate a single block of memory for the weights, so that we can do
+            # certain operations like += and *= in one operation, instead of separately for
+            # each layer.
+            sizes   = [(cfg[k].size+1)*cfg[k+1].size   for k in range(len(cfg)-1) ]
+            offsets = [0] + [sum(sizes[:i+1]) for i in range(len(sizes))]
+            self._mem = empty((sum(sizes),1))
+            self._layers = [DenseWeights(cfg[k],cfg[k+1],self._mem[offsets[k]:offsets[k+1]])     for k in range(len(cfg)-1) ]
+        else:
+            self._layers = None
+            self._mem = None
 
     def copy(self):
         ws = WeightSet(None)
@@ -205,12 +219,18 @@ class WeightSet(object):
         return ws
 
     def ravel(self):
+        if self._weights != None:
+            return self._weights.ravel()
         return np.hstack([layer.ravel() for layer in self._layers])
 
     def step_by(self,delta,alpha=1.0):
-        for layer,dlayer in zip(self._layers,delta._layers):
-            iaddmul(layer.W,dlayer.W,alpha)
-            iaddmul(layer.b,dlayer.b,alpha)
+        if self._mem != None and delta._mem != None:
+            # Add delta to all weights in a single step
+            iaddmul(self._mem,delta._mem,alpha)
+        else:
+            for layer,dlayer in zip(self._layers,delta._layers):
+                iaddmul(layer.W,dlayer.W,alpha)
+                iaddmul(layer.b,dlayer.b,alpha)
 
     def __getitem__(self,i):
         return self._layers[i]
@@ -222,18 +242,30 @@ class WeightSet(object):
         return len(self._layers)
 
     def __iadd__(self,other):
-        for w,v in izip(self._layers,other._layers):
-            w += v
+        can_accelerate = self._mem != None and ((not isinstance(other,WeightSet)) or other._mem != None)
+        if can_accelerate:
+            iadd(self._mem,other._mem if isinstance(other,WeightSet) else other)
+        else:
+            for w,v in izip(self._layers,other._layers):
+                w += v
         return self
 
     def __isub__(self,other):
-        for w,v in izip(self._layers,other._layers):
-            w -= v 
+        can_accelerate = self._mem != None and ((not isinstance(other,WeightSet)) or other._mem != None)
+        if can_accelerate:
+            isub(self._mem,other._mem if isinstance(other,WeightSet) else other)
+        else:
+            for w,v in izip(self._layers,other._layers):
+                w -= v 
         return self
 
-    def __imul__(self,alpha):
-        for w in self._layers:
-            w *= alpha
+    def __imul__(self,other):
+        can_accelerate = self._mem != None and ((not isinstance(other,WeightSet)) or other._mem != None)
+        if can_accelerate:
+            imul(self._mem,other._mem if isinstance(other,WeightSet) else other)
+        else:
+            for w in self._layers:
+                w *= other
         return self
 
 

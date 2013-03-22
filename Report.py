@@ -1,6 +1,7 @@
 from numpy import *
 import random as rnd
 import BigMat as bm
+import weakref
 from DataSet import BatchSet
 from Util import ensure_dir
 import collections
@@ -25,7 +26,8 @@ import Tkinter as Tk
 _curr_logfile = None
 _num_logfile_entries = 0
 _best_logfile_errors = {}
-_logs_dir = "C:/Users/Andrew/Dropbox/share/tom/logs"
+#_logs_dir = "C:/Users/Andrew/Dropbox/share/tom/logs"
+_logs_dir = "logs"
 
 def open_logfile(prefix='train',msg=""):
     global _curr_logfile
@@ -70,7 +72,7 @@ def close_logfile():
 class TrainingReport(object):
 
     def __init__(self,trainer,verbose=True,interval=10,interval_rate=1.0,visualize=False,log_mode='none',callback=None):
-        self.trainer = trainer
+        self.trainer = weakref.ref(trainer)
         self.verbose = verbose
         self.visualize = visualize
         self._last_update_epoch = 0
@@ -86,22 +88,27 @@ class TrainingReport(object):
         if visualize:
             self._window = TrainingReportWindow(trainer)
 
+    def __del__(self):
+        if self._window:
+            self._window.destroy()
+
     def __call__(self,event):
         '''
         Collects statistics about the model currently being trained by
         the 'trainer'. 
         '''
+        trainer = self.trainer()
         # Only update stats at certain epoch intervals, for the sake of training speed
-        if event == "epoch" and (self.trainer.epoch - self._last_update_epoch) < int(self.interval):
+        if event == "epoch" and (trainer.epoch - self._last_update_epoch) < int(self.interval):
             return
-        self._last_update_epoch = self.trainer.epoch
+        self._last_update_epoch = trainer.epoch
         self.interval *= self.interval_rate  # speed up or slow down the rate of updates that get logged
 
         stats = {}
         stats["time"]  = now() - self._start_time
-        stats["epoch"] = self.trainer.epoch
-        stats["learn_rate"] = self.trainer.learn_rate
-        stats["momentum"]   = self.trainer.momentum
+        stats["epoch"] = trainer.epoch
+        stats["learn_rate"] = trainer.learn_rate
+        stats["momentum"]   = trainer.momentum
         for fold in ('train','valid','test'):
             stats[fold] = self._collect_stats_on_fold(fold)
 
@@ -117,7 +124,7 @@ class TrainingReport(object):
         else:                msg += event
         trstats = stats['train']
 
-        if self.trainer.task() == "classification":
+        if self.trainer().task() == "classification":
             # classification-specific output format
             msg += ': err=%.2f%%' % trstats['error rate']
             if stats['valid']:  msg += '/%.2f%%' % stats['valid']['error rate']
@@ -151,7 +158,7 @@ class TrainingReport(object):
         Give a particular fold (training/testing) this evaluates the model using
         the current fold, and collects statistics about how the model is performing.
         '''
-        data = self.trainer.data[fold]
+        data = self.trainer().data[fold]
         if data.size == 0:
             return None
         
@@ -192,14 +199,14 @@ class TrainingReport(object):
         the current fold, and collects statistics about how the model is performing.
         '''
         X,Y = batch
-        model = self.trainer.model
+        model = self.trainer().model
         H = model.eval(X,want_hidden=True)
         stats = {}
         stats["H"]           = [bm.as_numpy(Hi).copy() for Hi in H]  # make a copy of hidden activations
         stats["loss"]        = model.loss(H[-1],Y)  # scalar loss value
         stats["regularizer"] = model.regularizer(H) # scalar hidden unit regularization penalty
         stats["penalty"]     = model.penalty()      # scalar weight penalty
-        if self.trainer.task() == "classification":
+        if self.trainer().task() == "classification":
             stats["error rate"] = 100*count_nonzero(array(argmax(H[-1],axis=1)) != argmax(Y,axis=1)) / float(batch.size)
         return stats
         
@@ -316,7 +323,8 @@ class TrainingReportWindow(Tk.Frame):
             self.plots["feat_out"].canvas.get_tk_widget().grid(row=0,column=(2 if self.plots.has_key("feat_in") else 1),sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
         # *Weight* statistics in bottom-left cell
-        get_weightmats = lambda event,stats: [bm.as_numpy(abs(layer.W)) for layer in trainer.model.weights]
+        weights_ref = weakref.ref(trainer.model.weights)
+        get_weightmats = lambda event,stats: [bm.as_numpy(abs(layer.W)) for layer in weights_ref()]
         weight_percentiles =  list(100*(1-linspace(0.1,.9,10)**1.5))
         self.plots["wstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_weightmats,weight_percentiles,True,title="W")
         self.plots["wstats"].canvas.get_tk_widget().grid(row=1,column=0,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
@@ -333,7 +341,6 @@ class TrainingReportWindow(Tk.Frame):
             self.plots["recons"] = TrainingReportReconstructGrid(self.master,(col1_wd,row1_ht),dpi,trainer.data)
             self.plots["recons"].canvas.get_tk_widget().grid(row=1,column=1,rowspan=2,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
-        self.master.protocol("WM_DELETE_WINDOW",self._close_window)
         self.master.geometry('+%d+%d' % (0,180))
         self.master.title("Training Report")
         self.update()
@@ -343,14 +350,6 @@ class TrainingReportWindow(Tk.Frame):
         for plot in self.plots.values():
             plot.log(event,stats)
         self.redraw()
-
-    def _quit_program(self):
-        self.master.quit()
-        self.master.destroy()
-        quit()
-
-    def _close_window(self):
-        self.want_quit = True  # quit later
 
     def redraw(self):
         for plot in self.plots.values():

@@ -47,6 +47,12 @@ class NumpyBackend(object):
     def randn(*shape):   return np.array(np.random.randn(*shape),default_dtype)
 
     @staticmethod
+    def fill_rand(out):  out[:] = np.random.rand(out.shape[0],out.shape[1])
+
+    @staticmethod
+    def fill_randn(out): out[:] = np.random.randn(out.shape[0],out.shape[1])
+
+    @staticmethod
     def array(A):        return np.array(A,default_dtype)
 
     @staticmethod
@@ -182,6 +188,12 @@ class GnumpyBackend(object):
 
     @staticmethod
     def randn(*shape):   return gp.randn(*shape)
+
+    @staticmethod
+    def fill_rand(out):  out._base.fill_with_rand()
+
+    @staticmethod
+    def fill_randn(out): out._base.fill_with_randn()
 
     @staticmethod
     def array(A):        return gp.garray(A)
@@ -412,6 +424,8 @@ def zeros(shape):          return backend.zeros(shape)
 def ones(shape):           return backend.ones(shape)
 def rand(*shape):          return backend.rand(*shape)
 def randn(*shape):         return backend.randn(*shape)
+def fill_rand(out):        return backend.fill_rand(out)
+def fill_randn(out):       return backend.fill_randn(out)
 def array(A):              return backend.array(A)         # new copy of A
 def asarray(A):            return backend.asarray(A)       # new *view* of A
 def as_numpy(A):           return backend.as_numpy(A)
@@ -426,7 +440,7 @@ def exp(A,out=None):       return backend.exp(A,out)      if not np.isscalar(A) 
 def log(A,out=None):       return backend.log(A,out)      if not np.isscalar(A) else np.log(A)
 def abs(A,out=None):       return backend.abs(A,out)      if not np.isscalar(A) else np.abs(A)
 def sign(A,out=None):      return backend.sign(A,out)     if not np.isscalar(A) else np.sign(A)
-def sum(A,axis=0,out=None):return backend.sum(A,axis,out)
+def sum(A,axis=0,out=None):return __builtins__['sum'](A) if isinstance(A,list) else backend.sum(A,axis,out)
 def mean(A,axis=0,out=None):return backend.mean(A,axis,out)
 def add(A,B,out=None):     return backend.add(A,B,out)       # A + B
 def iadd(A,B):             return backend.iadd(A,B)          # A += B
@@ -451,7 +465,8 @@ def set_backend(name,dtype='float32'):
     if name == 'gnumpy':
         assert(dtype == 'float32')
         if not _gnumpy_loaded:
-            raise RuntimeError("cannot set backend to gnumpy; module 'gnumpy' failed to import")
+            print "warning: cannot set backend to gnumpy; module 'gnumpy' failed to import; using numpy instead"
+            return
         backend = GnumpyBackend
         default_dtype = 'float32'
     elif name == 'numpy':

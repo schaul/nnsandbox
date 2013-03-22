@@ -21,8 +21,8 @@ def main():
     # Create a neural network with matching input/output dimensions
     cfg = NeuralNetCfg(L1=1e-7*0,init_scale=0.1**2)
     cfg.input(data.Xshape,dropout=0.2)
-    cfg.hidden(800,"logistic",dropout=0.5,maxnorm=4.0,sparsity=[0.00001,0.001])
-    cfg.hidden(800,"logistic",dropout=0.5,maxnorm=4.0,sparsity=[0.00001,0.001])
+    cfg.hidden(800,"logistic",dropout=0.5,maxnorm=4.0)
+    cfg.hidden(800,"logistic",dropout=0.5,maxnorm=4.0)
     cfg.output(data.Yshape,"softmax",maxnorm=4.0)
 
     model = NeuralNet(cfg)
