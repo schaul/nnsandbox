@@ -1,4 +1,5 @@
 from BigMat import *
+from numpy import inf
 from Util import TempMatrix
 
 class Activation(object):
@@ -11,10 +12,27 @@ class Activation(object):
     '''
     def ideal_loss(self): return 'mse'
 
+class ActivationLinear(Activation):
+    '''Activation function identity(A)'''
+    def name(self):         return "linear"
+    def ideal_domain(self): return [-1,1]
+    def ideal_range(self):  return [-1,1]
+    def actual_range(self): return [-inf,inf]
+
+    def __call__(self,A,out=None,dout=None):
+        if out == None:
+            return A
+        if not (out is A):
+            out[:] = A[:]
+        if dout != None:
+            imul(dout,0)
+            iadd(dout,1)
+
+
 class ActivationLogistic(Activation):
     '''Activation function sigmoid(A), i.e. logisitic function'''
     def name(self):         return "logistic"
-    def ideal_domain(self): return [-0.1,1.1]
+    def ideal_domain(self): return [ 0.0,1.0]
     def ideal_range(self):  return [ 0.1,0.9]
     def actual_range(self): return [ 0.0,1.0]
 
@@ -37,7 +55,7 @@ class ActivationTanh(Activation):
 
     def __call__(self,A,out=None,dout=None):
         if out == None:
-            return tanhx(A)
+            return tanh(A)
         tanh(A,out=out)
         if dout != None:
             square(out,out=dout)
@@ -91,7 +109,8 @@ class ActivationSoftmax(Activation):
 ##########################################################
 
 def make_activation(typename):
-    if   typename == "logistic": return ActivationLogistic()
+    if   typename == "linear":   return ActivationLinear()
+    elif typename == "logistic": return ActivationLogistic()
     elif typename == "tanh":     return ActivationTanh()
     elif typename == "relu":     return ActivationRelu()
     elif typename == "softmax":  return ActivationSoftmax()

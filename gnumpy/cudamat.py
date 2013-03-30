@@ -5,8 +5,7 @@ import numpy as np
 MAX_ONES = 1024*256
 
 dllext = 'dll' if platform.system() == 'Windows' else 'so'
-#dllpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),'libcudamat.%s' % dllext)
-dllpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),'libcudamat_nosync.%s' % dllext)
+dllpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),'libcudamat.%s' % dllext)
 
 _cudamat = ct.cdll.LoadLibrary(dllpath)
 
@@ -14,6 +13,8 @@ _cudamat.get_last_cuda_error.restype = ct.c_char_p
 _cudamat.cublas_init.restype = ct.c_int
 _cudamat.cublas_shutdown.restype = ct.c_int
 _cudamat.cuda_set_device.restype = ct.c_int
+_cudamat.cuda_memory_available.restype = ct.c_ulong
+_cudamat.cuda_memory_total.restype = ct.c_ulong
 _cudamat.init_random.restype = ct.c_int
 
 _cudamat.init_empty.restype = ct.c_int
@@ -37,11 +38,14 @@ _cudamat.add_col_mult.restype = ct.c_int
 _cudamat.add_row_vec.restype = ct.c_int
 _cudamat.mult_by_col_vec.restype = ct.c_int
 _cudamat.mult_by_row_vec.restype = ct.c_int
+_cudamat.mult_by_col_rsqrt.restype = ct.c_int
 
 _cudamat.less_than.restype = ct.c_int
 _cudamat.less_than_scalar.restype = ct.c_int
 _cudamat.greater_than.restype = ct.c_int
 _cudamat.greater_than_scalar.restype = ct.c_int
+_cudamat.maximum.restype = ct.c_int
+_cudamat.maximum_scalar.restype = ct.c_int
 _cudamat.max_by_axis.restype = ct.c_int
 _cudamat.sign.restype = ct.c_int
 _cudamat.apply_sigmoid.restype = ct.c_int
@@ -54,6 +58,8 @@ _cudamat.apply_sqrt.restype = ct.c_int
 _cudamat.apply_pow.restype = ct.c_int
 _cudamat.apply_pow_matrix.restype = ct.c_int
 _cudamat.reciprocal.restype = ct.c_int
+_cudamat.square.restype = ct.c_int
+_cudamat.dropout.restype = ct.c_int
 
 _cudamat.add_elementwise.restype = ct.c_int
 _cudamat.subtract_elementwise.restype = ct.c_int
@@ -538,6 +544,24 @@ class CUDAMatrix(object):
 
         return target
 
+    def maximum(self, val, target = None):
+        """
+        Perform the operation target = maximum(self,val), where val can be a matrix or a scalar.
+        """
+
+        if not target:
+            target = self
+
+        if isinstance(val, (int, float)):
+            err_code = _cudamat.maximum_scalar(self.p_mat, ct.c_float(val), target.p_mat)
+        else:
+            err_code = _cudamat.maximum(self.p_mat, val.p_mat, target.p_mat)
+
+        if err_code:
+            raise generate_exception(err_code)
+
+        return target
+
     def max(self, axis, target = None):
         """
         Find the maximum value along the given dimension, where 0 represents the
@@ -718,6 +742,22 @@ class CUDAMatrix(object):
         else:
             raise ValueError, "Value must be of type CUDAMatrix, int, or float."
 
+        if err_code:
+            raise generate_exception(err_code)
+
+        return target
+
+    def mult_by_col_rsqrt(self, vec, eps, target = None):
+        """
+        Multiply each column of self elementwise by the reciprocal square root of vec;
+        however, if vec[i] < eps, then self[i] is not changed. If a target is
+        provided, it is used to store the result instead of self.
+        """
+
+        if not target:
+            target = self
+
+        err_code = _cudamat.mult_by_col_rsqrt(self.p_mat, vec.p_mat, ct.c_float(eps), target.p_mat)
         if err_code:
             raise generate_exception(err_code)
 
@@ -1022,6 +1062,46 @@ def pow(mat, p, target = None):
 
     return target
 
+def square(mat, target = None):
+    """
+    Square each element of the matrix mat.
+    """
+
+    if not target:
+        target = mat
+
+    err_code = _cudamat.square(mat.p_mat, target.p_mat)
+
+    if err_code:
+        raise generate_exception(err_code)
+
+    return target
+
+def dropout(matA, matB, dropout_rate, targetA = None, targetB = None):
+    """
+    Set each element of mat to zero, independently, with probability "dropout_rate".
+    """
+
+    if not targetA:
+        targetA = matA
+
+    if not targetB:
+        targetB = matB
+
+    if matB != None:
+        err_code = _cudamat.dropout(CUDAMatrix.rnd_state_p, 
+                                    matA.p_mat, matB.p_mat,
+                                    ct.c_float(dropout_rate), 
+                                    targetA.p_mat,targetB.p_mat)
+    else:
+        err_code = _cudamat.dropout(CUDAMatrix.rnd_state_p, 
+                                    matA.p_mat, None,
+                                    ct.c_float(dropout_rate), 
+                                    targetA.p_mat,None)
+
+    if err_code:
+        raise generate_exception(err_code)
+
 def cuda_sync_threads():
     _cudamat.cuda_sync_threads()
 
@@ -1040,6 +1120,14 @@ def cuda_set_device(dev_id):
     err_code =  _cudamat.cuda_set_device(ct.c_int(dev_id))
     if err_code:
         raise generate_exception(err_code)
+
+def cuda_memory_info():
+    """
+    Returns (available memory, total memory) in bytes
+    """
+    avail = _cudamat.cuda_memory_available()
+    total = _cudamat.cuda_memory_total()
+    return (avail,total)
 
 def cublas_init():
     """

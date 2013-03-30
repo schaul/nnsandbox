@@ -36,6 +36,8 @@ __global__ void kLessThan(float* mat1, float* mat2, float* target, unsigned int 
 __global__ void kLessThanScalar(float* mat, float val, float* target, unsigned int len);
 __global__ void kGreaterThan(float* mat1, float* mat2, float* target, unsigned int len);
 __global__ void kGreaterThanScalar(float* mat, float val, float* target, unsigned int len);
+__global__ void kMaximum(float* mat1, float* mat2, float* target, unsigned int len);
+__global__ void kMaximumScalar(float* mat, float val, float* target, unsigned int len);
 __global__ void kMaxColumnwise(float* mat, float* target, unsigned int width, unsigned int height);
 __global__ void kSign(float* mat, float* target, unsigned int len);
 __global__ void kApplySigmoid(float* mat, float* target, unsigned int len);
@@ -45,6 +47,7 @@ __global__ void kApplyLog1PlusExp(float* mat, float* target, unsigned int len);
 __global__ void kLog(float* mat, float* target, unsigned int len);
 __global__ void kExp(float* mat, float* target, unsigned int len);
 __global__ void kSqrt(float* mat, float* target, unsigned int len);
+__global__ void kSquare(float* mat, float* target, unsigned int len);
 __global__ void kPow(float* mat, float pow, float* target, unsigned int len);
 __global__ void kPowMatrix(float* mat, float* pow, float* target, unsigned int len);
 __global__ void kReciprocal(float* mat, float* target, unsigned int len);
@@ -53,6 +56,7 @@ __global__ void kAddRowVector(float* mat, float* vec, float* tgtMat, unsigned in
 __global__ void kAddColMult(float* mat, float* vec, float* tgtMat, float mult, unsigned int width, unsigned int height);
 __global__ void kMultByColVector(float* mat, float* vec, float* tgtMat, unsigned int width, unsigned int height);
 __global__ void kMultByRowVector(float* mat, float* vec, float* tgtMat, unsigned int width, unsigned int height);
+__global__ void kMultByColRecipSqrt(float* mat, float* vec, float eps, float* tgtMat, unsigned int width, unsigned int height);
 __global__ void kAdd(float* a, float* b, float* dest, unsigned int numEls);
 __global__ void kSubtract(float* a, float* b, float* dest, unsigned int numEls);
 __global__ void kMult(float* a, float* b, float* dest, unsigned int numEls);
@@ -63,4 +67,5 @@ __global__ void kDivideScalar(float* mat, float alpha, float* dest, unsigned int
 __global__ void kAddScalar(float* a, float alpha, float* dest, unsigned int numEls);
 __global__ void kSelectRows(float* source, float* target, float* indices, int nRowIs, int nCols, int nSourceRows);
 __global__ void kSetSelectedRows(float* target, float* source, float* indices, int nRowIs, int nCols, int nTargetRows);
+__global__ void kDropout(unsigned int* randMults, unsigned long long* randWords, float* matA, float* matB, float rate, float* targetA, float* targetB, unsigned int len);
 #endif

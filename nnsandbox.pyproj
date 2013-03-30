@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{863d67d8-c884-45e5-9fde-459993a0fad9}</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>gen_trainees.py</StartupFile>
+    <StartupFile>test_mnist.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>
@@ -31,6 +31,7 @@
     <Compile Include="Activation.py" />
     <Compile Include="BigMat.py" />
     <Compile Include="gen_trainees.py" />
+    <Compile Include="test_render.py" />
     <Compile Include="Util.py" />
     <Compile Include="DataSet.py" />
     <Compile Include="Model.py" />

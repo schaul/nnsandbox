@@ -1,5 +1,8 @@
 from numpy import *
+import random as rnd
 import BigMat as bm
+import weakref
+from DataSet import BatchSet
 from Util import ensure_dir
 import collections
 import time
@@ -23,6 +26,7 @@ import Tkinter as Tk
 _curr_logfile = None
 _num_logfile_entries = 0
 _best_logfile_errors = {}
+#_logs_dir = "C:/Users/Andrew/Dropbox/share/tom/logs"
 _logs_dir = "logs"
 
 def open_logfile(prefix='train',msg=""):
@@ -68,7 +72,7 @@ def close_logfile():
 class TrainingReport(object):
 
     def __init__(self,trainer,verbose=True,interval=10,interval_rate=1.0,visualize=False,log_mode='none',callback=None):
-        self.trainer = trainer
+        self.trainer = weakref.ref(trainer)
         self.verbose = verbose
         self.visualize = visualize
         self._last_update_epoch = 0
@@ -84,22 +88,27 @@ class TrainingReport(object):
         if visualize:
             self._window = TrainingReportWindow(trainer)
 
+    def __del__(self):
+        if self._window:
+            self._window.destroy()
+
     def __call__(self,event):
         '''
         Collects statistics about the model currently being trained by
         the 'trainer'. 
         '''
+        trainer = self.trainer()
         # Only update stats at certain epoch intervals, for the sake of training speed
-        if event == "epoch" and (self.trainer.epoch - self._last_update_epoch) < int(self.interval):
+        if event == "epoch" and (trainer.epoch - self._last_update_epoch) < int(self.interval):
             return
-        self._last_update_epoch = self.trainer.epoch
+        self._last_update_epoch = trainer.epoch
         self.interval *= self.interval_rate  # speed up or slow down the rate of updates that get logged
 
         stats = {}
         stats["time"]  = now() - self._start_time
-        stats["epoch"] = self.trainer.epoch
-        stats["learn_rate"] = self.trainer.learn_rate
-        stats["momentum"]   = self.trainer.momentum
+        stats["epoch"] = trainer.epoch
+        stats["learn_rate"] = trainer.learn_rate
+        stats["momentum"]   = trainer.momentum
         for fold in ('train','valid','test'):
             stats[fold] = self._collect_stats_on_fold(fold)
 
@@ -115,7 +124,7 @@ class TrainingReport(object):
         else:                msg += event
         trstats = stats['train']
 
-        if self.trainer.task() == "classification":
+        if self.trainer().task() == "classification":
             # classification-specific output format
             msg += ': err=%.2f%%' % trstats['error rate']
             if stats['valid']:  msg += '/%.2f%%' % stats['valid']['error rate']
@@ -149,20 +158,58 @@ class TrainingReport(object):
         Give a particular fold (training/testing) this evaluates the model using
         the current fold, and collects statistics about how the model is performing.
         '''
-        data = self.trainer.data[fold]
+        data = self.trainer().data[fold]
         if data.size == 0:
             return None
-        X,Y = data
-        model = self.trainer.model
+        
+        # Calculate the current performance stats in batches,
+        # so that we don't blow the GPUs memory by sending the
+        # whole dataset through at once
+        stats = {}
+        batches = BatchSet(data.X,data.Y,512)
+        for batch in batches:
+            bstats = self._collect_stats_on_batch(batch)
+            for key,val in bstats.items():
+                if not stats.has_key(key):
+                    stats[key] = []
+                stats[key].append(val)
+
+        # For each key, call a 'reducer' to combine all values collected
+        def stackHbatches(Hbatches):
+            Hall = []
+            nlayer = len(Hbatches[0])
+            for i in range(nlayer):
+                Hall.append(vstack([Hbatch[i]  for Hbatch in Hbatches]))
+            return Hall
+
+        reducers = {"H" : stackHbatches,
+                    "loss" : mean,
+                    "regularizer" : mean,
+                    "penalty" : mean,
+                    "error rate" : mean}
+        for key,val in stats.items():
+            stats[key] = reducers[key](val)
+
+        return stats
+        
+
+    def _collect_stats_on_batch(self,batch):
+        '''
+        Give a particular fold (training/testing) this evaluates the model using
+        the current fold, and collects statistics about how the model is performing.
+        '''
+        X,Y = batch
+        model = self.trainer().model
         H = model.eval(X,want_hidden=True)
         stats = {}
         stats["H"]           = [bm.as_numpy(Hi).copy() for Hi in H]  # make a copy of hidden activations
         stats["loss"]        = model.loss(H[-1],Y)  # scalar loss value
         stats["regularizer"] = model.regularizer(H) # scalar hidden unit regularization penalty
         stats["penalty"]     = model.penalty()      # scalar weight penalty
-        if self.trainer.task() == "classification":
-            stats["error rate"] = 100*count_nonzero(array(argmax(H[-1],axis=1)) != argmax(data.Y,axis=1)) / float(data.size)
+        if self.trainer().task() == "classification":
+            stats["error rate"] = 100*count_nonzero(array(argmax(H[-1],axis=1)) != argmax(Y,axis=1)) / float(batch.size)
         return stats
+        
 
     def _update_log(self,event,stats,msg):
         global _num_logfile_entries
@@ -203,11 +250,11 @@ class TrainingReport(object):
             # Insert an image or an animation, and close the outer-most DIV element
             if len(self._screenshots) > 0:
                 thumbfile = self._screenshots[-1]
-                thumburl = os.path.join(*(thumbfile.split('/')[1:]))
+                thumburl = "/".join(thumbfile.split('/')[-2:])
                 animurl  = thumburl
                 if len(self._screenshots) > 1:
                     animfile = os.path.splitext(thumbfile)[0] + '-anim.gif'
-                    animurl = os.path.join(*(animfile.split('/')[1:]))
+                    animurl = "/".join(animfile.split('/')[-2:])
                     inputs = os.path.split(thumbfile)[0] + '/img-%05d-%%02d.png[0-%d]' % (_num_logfile_entries,len(self._screenshots)-1)
                     os.system('convert -delay 30 -coalesce -layers optimize ' + inputs + ' ' + animfile)
 
@@ -246,37 +293,54 @@ class TrainingReportWindow(Tk.Frame):
         # Set up a 2x2 grid, where each cell will have its own kind of figure
         self.master.rowconfigure(0,weight=1)
         self.master.rowconfigure(1,weight=1)
+        self.master.rowconfigure(2,weight=1)
         self.master.columnconfigure(0,weight=1)
         self.master.columnconfigure(1,weight=1)
+        self.master.columnconfigure(2,weight=1)
         dpi = 80.0
         self.plots = {}
-        row0_ht = 250
-        row1_ht = 120
+        #col0_wd = 320
+        #col1_wd = 870
+        #row0_ht = 400
+        #row1_ht = 220
+        col0_wd = 300
+        col1_wd = 300
+        row0_ht = 200
+        row1_ht = 100
 
         # Add error plot in top-left cell
-        self.plots["errors"] = TrainingReportErrorPlot(self.master,(300,row0_ht),dpi,trainer.task())
+        self.plots["errors"] = TrainingReportErrorPlot(self.master,(col0_wd,row0_ht),dpi,trainer.task())
         self.plots["errors"].canvas.get_tk_widget().grid(row=0,column=0,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
-        # Feature grid in top-right cell
+        # Input feature grid in top-right cell
         if trainer.data.Xshape[0] > 1 and trainer.data.Xshape[1]:
-            self.plots["feat"] = TrainingReportFeatureGrid(self.master,(300,row0_ht),dpi,trainer.model,trainer.data.Xshape)
-            self.plots["feat"].canvas.get_tk_widget().grid(row=0,column=1,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
+            self.plots["feat_in"] = TrainingReportFeatureGrid(self.master,(col1_wd,row0_ht),dpi,trainer.model,trainer.data.Xshape,"input")
+            self.plots["feat_in"].canvas.get_tk_widget().grid(row=0,column=1,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
+
+        # Output feature grid in top-right-right cell
+        if trainer.data.Yshape[0] > 1 and trainer.data.Yshape[1]:
+            self.plots["feat_out"] = TrainingReportFeatureGrid(self.master,(col1_wd,row0_ht),dpi,trainer.model,trainer.data.Yshape,"output")
+            self.plots["feat_out"].canvas.get_tk_widget().grid(row=0,column=(2 if self.plots.has_key("feat_in") else 1),sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
         # *Weight* statistics in bottom-left cell
-        get_weightmats = lambda event,stats: [bm.as_numpy(abs(layer.W)) for layer in trainer.model.weights]
+        weights_ref = weakref.ref(trainer.model.weights)
+        get_weightmats = lambda event,stats: [bm.as_numpy(abs(layer.W)) for layer in weights_ref()]
         weight_percentiles =  list(100*(1-linspace(0.1,.9,10)**1.5))
-        self.plots["wstats"] = TrainingReportPercentiles(self.master,(300,row1_ht),dpi,get_weightmats,weight_percentiles)
+        self.plots["wstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_weightmats,weight_percentiles,True,title="W")
         self.plots["wstats"].canvas.get_tk_widget().grid(row=1,column=0,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
-
 
         # *Hidden activity* statistics in bottom-right cell
         get_hidden = lambda event,stats: stats["train"]["H"]
         hidden_percentiles =  list(100*(1-linspace(0.1,.9,10)**1.5))
         ranges = [layer.f.actual_range() for layer in trainer.model._cfg[1:]]
-        self.plots["hstats"] = TrainingReportPercentiles(self.master,(300,row1_ht),dpi,get_hidden,hidden_percentiles,ranges=ranges)
+        self.plots["hstats"] = TrainingReportPercentiles(self.master,(col0_wd,row1_ht),dpi,get_hidden,hidden_percentiles,False,ranges=ranges,title="H")
         self.plots["hstats"].canvas.get_tk_widget().grid(row=1,column=1,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
 
-        self.master.protocol("WM_DELETE_WINDOW",self._close_window)
+        # For problems with 2D output, draw the target and the reconstruction side by side
+        if trainer.data.Yshape[0] > 1 and trainer.data.Yshape[1]:
+            self.plots["recons"] = TrainingReportReconstructGrid(self.master,(col1_wd,row1_ht),dpi,trainer.data)
+            self.plots["recons"].canvas.get_tk_widget().grid(row=1,column=1,rowspan=2,sticky=Tk.N+Tk.S+Tk.E+Tk.W)
+
         self.master.geometry('+%d+%d' % (0,180))
         self.master.title("Training Report")
         self.update()
@@ -286,14 +350,6 @@ class TrainingReportWindow(Tk.Frame):
         for plot in self.plots.values():
             plot.log(event,stats)
         self.redraw()
-
-    def _quit_program(self):
-        self.master.quit()
-        self.master.destroy()
-        quit()
-
-    def _close_window(self):
-        self.want_quit = True  # quit later
 
     def redraw(self):
         for plot in self.plots.values():
@@ -310,13 +366,14 @@ class TrainingReportWindow(Tk.Frame):
         self._unique_id += 1
         
         # First save the individual Figure canvases to files
-        pnames = ('errors','feat','wstats','hstats')
+        pnames = ('errors','feat_in','feat_out','wstats','hstats')
         fnames = []
         for pname in pnames:
-            fnames.append(tempname % pname)
-            plot = self.plots[pname]
-            plot.redraw()
-            plot.savefig(fnames[-1],dpi=80)
+            if self.plots.has_key(pname):
+                fnames.append(tempname % pname)
+                plot = self.plots[pname]
+                plot.redraw()
+                plot.savefig(fnames[-1],dpi=80)
 
         # Then use ImageMagick to put them together again
         cmd = 'montage'
@@ -399,7 +456,7 @@ class TrainingReportErrorPlot(Figure):
 
 class TrainingReportFeatureGrid(Figure):
 
-    def __init__(self,master,size,dpi,model,inshape):
+    def __init__(self,master,size,dpi,model,featshape,direction='input'):
         Figure.__init__(self,figsize=(size[0]/dpi,size[1]/dpi),dpi=dpi,facecolor='w',edgecolor='b',frameon=True,linewidth=0)
         FigureCanvas(self,master=master)
         self.master = master
@@ -407,17 +464,33 @@ class TrainingReportFeatureGrid(Figure):
         self._model = model
         self._feat  = None
         self._featrange = None
-        self._inshape = inshape
+        self._featshape = featshape
+        self._direction = direction
         self._sorted = True
+        self._ordering = None
         self.add_subplot(111,axisbg='w')
         
     def log(self,event,stats):
-        W,b = self._model.weights[0]
-        self._feat  = bm.as_numpy(W).copy() # col[i] contains weights entering unit i in first hidden layer
-        self._featrange = (min(self._feat.ravel()),max(self._feat.ravel()))
-        #self._feat += as_floatx(b)        # add bias
-        self._feat = self._feat.reshape(self._inshape + tuple([-1]))
+        if self._direction == 'input':
+            # Filters going into first layer of hidden units
+            W = self._model.weights[0].W
+            W = bm.as_numpy(W).copy()
+            W = W.reshape(self._featshape + tuple([-1]))
+        else:
+            # Templates going out of final layer of hidden units
+            W = self._model.weights[-1].W
+            W = bm.as_numpy(W).copy().transpose()
+            W = W.reshape(self._featshape + tuple([-1]))
+        self._feat  = W # col[i] contains weights entering unit i in first hidden layer
+        self._featrange = (min(W.ravel()),max(W.ravel()))
         self._dirty = True
+        if event == 'epoch' and self._sorted and (stats['epoch'] < 5):
+            # Sort by decreasing L2 norm
+            ranks = [-sum(self._feat[:,:,j].ravel()**2) for j in range(self._feat.shape[2])]
+            self._ordering = argsort(ranks)
+        if self._ordering != None:
+            self._feat = self._feat[:,:,self._ordering]
+
 
     def redraw(self):
         if self._dirty:
@@ -425,113 +498,33 @@ class TrainingReportFeatureGrid(Figure):
             feat = self._feat
             self.clf()
 
-            if self._sorted:
-                # Sort by decreasing variance
-                variances = [-var(feat[:,:,j].ravel()) for j in range(feat.shape[2])]
-                feat = feat[:,:,argsort(variances)]
-
             # Convert list of features into a grid of images, fitting the current drawing canvas
             wd,ht = self.canvas.get_width_height()
             zoom = max(1,16//max(feat.shape[0:2]))
-            img = self._feat2grid(feat,zoom,1.0,[1.0*wd-2,ht-30])
+            absmax = max(abs(feat.ravel()))
+            img = _feat2grid(feat,zoom,1.0,[wd-2,ht-30],vminmax=(-absmax,absmax))
 
             # Draw the image centered
             x0,y0 = (wd-img.shape[1])/2, (ht-img.shape[0])/2
             self.figimage(img,x0,y0,None,None,cm.gray,zorder=2)
 
             # Print the range of the colormap we're seeing
-            self.text(float(x0)/wd,float(y0-15)/ht,'[%.3f,%.3f]' % self._featrange,zorder=5)
-            self.text(float(x0)/wd,float(y0+img.shape[0]+5)/ht,'features',zorder=5)
+            self.text(float(x0)/wd,float(y0+img.shape[0]+5)/ht,'%s features (%.3f,%.3f)' % (self._direction,self._featrange[0],self._featrange[1]),zorder=5)
 
             self.canvas.draw()
     
 
 
-    def _feat2grid(self,feat,zoom=1.0,gamma=1.0,bbox=[300,300],want_transpose=False,outframe=True,pad=1):
-        '''
-        Like feature2img, except returns a single image with
-        a grid layout, instead of a list of individual images
-        '''
-        ht,wd,n = feat.shape
-        wd *= zoom
-        ht *= zoom
-        opad = pad if outframe else 0
-        bbwd,bbht = bbox
-        maxcols = int(bbwd-2*opad+pad)//(wd+pad)
-        maxrows = int(bbht-2*opad+pad)//(ht+pad)
-        if want_transpose: numrows,numcols = self._gridsize(maxrows,maxcols,n)
-        else:              numcols,numrows = self._gridsize(maxcols,maxrows,n)
-
-        # Convert 3D array features into a 3D array of images
-        img = self._feat2img(feat[:,:,:min(n,numrows*numcols)],zoom=zoom,gamma=gamma)
-
-        # Pull each image out and place it within a grid cell, leaving space for padding
-        framecolor = 0
-        numchannels = img[0].shape[2]
-        grid = zeros([numrows*(ht+pad)-pad+2*opad,numcols*(wd+pad)-pad+2*opad,numchannels],dtype=ubyte) + framecolor
-        for i in range(len(img)):
-            ri = (i % numrows) if     want_transpose else floor(i / numcols)
-            ci = (i % numcols) if not want_transpose else floor(i / numrows)
-            row0 = ri * (ht+pad) + opad 
-            col0 = ci * (wd+pad) + opad
-            grid[row0:row0+ht,col0:col0+wd,:] = img[i]
-
-        if numchannels==1:
-            grid.shape = grid.shape[0:2]  # matplotlib's figimage doesn't like extra dimension on greyscale images
-        return grid
-    
-
-
-    def _gridsize(self,max1,max2,n):
-        '''Calculates the dimensions of the grid, in 'cells', for n items'''
-        max1 = float(max1); max2 = float(max2); n = float(n)
-        if max1 <= 1:
-            return (0,0)
-        num1 = min(max1,n)
-        num2 = 1.0
-        while ceil(n/(max1-1)) <= max1-1 and ceil(n/(max1-1)) <= max2 and ceil(n/(max1-1)) > num2:
-            num1 -= 1
-            num2 = ceil(n/num1)
-        if num1 == 0:
-            return (0,0)
-        num2 = min(max2,ceil(n/num1))
-        return (int(num1),int(num2))
-
-
-    def _feat2img(self,feat,zoom,gamma):
-        '''
-        Given an NxMxT stack of features (filters), splits it
-        into a list of NxM images.
-        '''
-        valrange = max(abs(feat.ravel())) # will scale [0,valrange] to [0,255]
-        if valrange <= 1e-10:
-            valrange = 1
-        ht,wd,n = feat.shape # n = number of features
-        normalize = True
-        img = []
-        for i in range(n):
-            I = reshape(feat[:,:,i],(ht,wd,1))
-            if normalize: I = sign(I)*pow(abs(I)/valrange,gamma)/2*255+127
-            else:         I = 255*pow((I+1)/2,gamma)
-            I = uint8(minimum(255,maximum(0,I)))
-            if zoom != 1:
-                I = repeat(I,zoom,axis=0)
-                I = repeat(I,zoom,axis=1)
-            img.append(I)
-        return img
-
-
-
 
 
 ##############################################################################
-#                               WEIGHT STATISTICS
+#                               PERCENTILE STATISTICS
 ##############################################################################
 
 
 class TrainingReportPercentiles(Figure):
 
-    def __init__(self,master,size,dpi,get_matrices_fn,percentiles,ranges=None):
+    def __init__(self,master,size,dpi,get_matrices_fn,percentiles,transposed,ranges=None,title=""):
         Figure.__init__(self,figsize=(size[0]/dpi,size[1]/dpi),dpi=dpi,facecolor='w',edgecolor='b',frameon=True,linewidth=0)
         FigureCanvas(self,master=master)
         self.master = master
@@ -540,13 +533,17 @@ class TrainingReportPercentiles(Figure):
         self._P = []
         self._t = percentiles
         self._ranges = ranges
+        self._title = title
+        self._transposed = transposed
         self.add_subplot(111,axisbg='w')
         
     def log(self,event,stats):
         self._P = []
         matrices = self._get_matrices_fn(event,stats)
         for A in matrices:
-            P = make_matrix_percentiles(A.transpose(),self._t)
+            if self._transposed:
+                A = A.transpose()
+            P = make_matrix_percentiles(A,self._t)  # percentiles over rows first, then percentiles over those last
             self._P.append(P)
         self._dirty = True
 
@@ -568,19 +565,21 @@ class TrainingReportPercentiles(Figure):
                 if Prange[1] ==  inf: Prange[1] = P.ravel().max()
                 P -= Prange[0]
                 if Prange[1] != Prange[0]:
-                    P *= 255/(Prange[1]-Prange[0])
-
-                zoom = 8
+                    P /= (Prange[1]-Prange[0])
+                P *= 255
+                P = minimum(P,255)
+                zoom = 6
                 img = asarray(P,dtype='uint8')
                 img = repeat(img,zoom,axis=0)
                 img = repeat(img,zoom,axis=1)
 
-                x0,y0 = (k+0.5)*(wd-img.shape[1])/nlayer, (ht-img.shape[0])/2
+                cellwd = float(wd)/nlayer
+                x0 = k*cellwd + (cellwd-img.shape[0])/2
+                y0 = (ht-img.shape[0])/2
                 self.figimage(img,x0,y0,None,None,cm.gray,zorder=2,vmin=0,vmax=255)
 
                 # Print the range of the colormap we're seeing
-                self.text(float(x0)/wd,float(y0-15)/ht,'[%.3f,%.3f]' % tuple(Prange),zorder=5)
-                self.text(float(x0)/wd,float(y0+img.shape[0]+5)/ht,'layer%d' % k,zorder=5)
+                self.text(float(x0)/wd,float(y0+img.shape[0]+5)/ht,'$%s_%d$ (%.2f,%.2f)' % (self._title,k,Prange[0],Prange[1]),zorder=5,size='smaller')
 
             self.canvas.draw()
     
@@ -589,11 +588,139 @@ class TrainingReportPercentiles(Figure):
 
 
 
+##############################################################################
+#                               RECONSTRUCTION GRID
+##############################################################################
+
+
+class TrainingReportReconstructGrid(Figure):
+
+    def __init__(self,master,size,dpi,data):
+        Figure.__init__(self,figsize=(size[0]/dpi,size[1]/dpi),dpi=dpi,facecolor='w',edgecolor='b',frameon=True,linewidth=0)
+        FigureCanvas(self,master=master)
+        self.master = master
+        self._dirty = True
+        self._fold = "test" if data["test"].size > 0 else "train"
+        self._indices = rnd.sample(arange(data[self._fold].size),minimum(data[self._fold].size,50))#256))
+        self._targets = bm.as_numpy(data[self._fold].Y[self._indices,:]).transpose().reshape(data.Yshape + tuple([len(self._indices)]))
+        self._outputs = None
+        self._outshape = data.Yshape
+        self._outrange = data.Yrange
+        self.add_subplot(111,axisbg='w')
+        
+    def log(self,event,stats):
+        Z = stats[self._fold]["H"][-1][self._indices]
+        self._outputs = Z.transpose().reshape(self._outshape + tuple([-1])) # format outputs as stack of (ht x wd) matrices
+        self._dirty = True
+
+    def redraw(self):
+        if self._dirty:
+            self._dirty = False
+            self.clf()
+
+            # Concatenate outputs and targets, side-by-side, and arrange
+            # into a grid of images, fitted to the current drawing canvas
+            pairs = hstack([self._outputs,self._targets])
+            wd,ht = self.canvas.get_width_height()
+            img = _feat2grid(pairs,zoom=1.0,gamma=1.0,bbox=[wd-2,ht-25],vminmax=self._outrange)
+
+            # Draw the grid image centered
+            x0,y0 = (wd-img.shape[1])/2, (ht-img.shape[0])/2
+            self.figimage(img,x0,y0,None,None,cm.gray,zorder=2,vmin=0,vmax=255)
+
+            '''
+            # Print the range of the colormap we're seeing
+            self.text(float(x0)/wd,float(y0-15)/ht,'[%.3f,%.3f]' % self._featrange,zorder=5)
+            self.text(float(x0)/wd,float(y0+img.shape[0]+5)/ht,'%s features' % self._direction,zorder=5)
+            '''
+            self.canvas.draw()
+    
 
 
 
+############################################################################
 
 
+
+def _feat2grid(feat,zoom=1.0,gamma=1.0,bbox=[300,300],want_transpose=False,outframe=True,pad=1,vminmax=None):
+    '''
+    Like feature2img, except returns a single image with
+    a grid layout, instead of a list of individual images
+    '''
+    ht,wd,n = feat.shape
+    wd *= zoom
+    ht *= zoom
+    opad = pad if outframe else 0
+    bbwd,bbht = bbox
+    maxcols = int(bbwd-2*opad+pad)//(wd+pad)
+    maxrows = int(bbht-2*opad+pad)//(ht+pad)
+    if want_transpose: numrows,numcols = _gridsize(maxrows,maxcols,n)
+    else:              numcols,numrows = _gridsize(maxcols,maxrows,n)
+
+    # Convert 3D array features into a 3D array of images
+    img = _feat2img(feat[:,:,:min(n,numrows*numcols)],zoom=zoom,gamma=gamma,vminmax=vminmax)
+
+    # Pull each image out and place it within a grid cell, leaving space for padding
+    framecolor = 0
+    numchannels = img[0].shape[2]
+    grid = zeros([numrows*(ht+pad)-pad+2*opad,numcols*(wd+pad)-pad+2*opad,numchannels],dtype=ubyte) + framecolor
+    for i in range(len(img)):
+        ri = (i % numrows) if     want_transpose else floor(i / numcols)
+        ci = (i % numcols) if not want_transpose else floor(i / numrows)
+        row0 = ri * (ht+pad) + opad 
+        col0 = ci * (wd+pad) + opad
+        grid[row0:row0+ht,col0:col0+wd,:] = img[i]
+
+    if numchannels==1:
+        grid.shape = grid.shape[0:2]  # matplotlib's figimage doesn't like extra dimension on greyscale images
+    return grid
+    
+
+
+def _gridsize(max1,max2,n):
+    '''Calculates the dimensions of the grid, in 'cells', for n items'''
+    max1 = float(max1); max2 = float(max2); n = float(n)
+    if max1 <= 1:
+        return (0,0)
+    num1 = min(max1,n)
+    num2 = 1.0
+    while ceil(n/(max1-1)) <= max1-1 and ceil(n/(max1-1)) <= max2 and ceil(n/(max1-1)) > num2:
+        num1 -= 1
+        num2 = ceil(n/num1)
+    if num1 == 0:
+        return (0,0)
+    num2 = min(max2,ceil(n/num1))
+    return (int(num1),int(num2))
+
+
+def _feat2img(feat,zoom,gamma,vminmax=None):
+    '''
+    Given an NxMxT stack of features (filters), splits it
+    into a list of NxM images.
+    '''
+    if vminmax == None:
+        vrange = (min(feat.ravel()),max(feat.ravel()))
+    ht,wd,n = feat.shape # n = number of features
+    img = []
+    for i in range(n):
+        I = reshape(feat[:,:,i],(ht,wd,1))
+        if vminmax != None:
+            I -= vminmax[0]
+            I *= 1./(vminmax[1]-vminmax[0])
+            pass
+        if gamma != 1.0:
+            I = pow(I,gamma)
+        I *= 255
+        I = uint8(minimum(255,maximum(0,I)))
+        if zoom != 1:
+            I = repeat(I,zoom,axis=0)
+            I = repeat(I,zoom,axis=1)
+        img.append(I)
+    return img
+
+
+
+############################################################################
 
 # Input: n-dimensional matrix A and and m percentile thresholds in list t. 
 # Returns an n-dimensional matrix P, where each dimension has size m, 

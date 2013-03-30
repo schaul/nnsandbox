@@ -1,5 +1,19 @@
 import numpy as np
-import sys
+import numpy.random
+import random
+import sys,gc
+import math,string
+
+_has_psutil = False
+try:
+    import psutil
+    _has_psutil = True
+except ImportError:
+    pass
+
+
+random.seed(9876)
+numpy.random.seed(5432)
 
 _gnumpy_loaded = False
 try:
@@ -10,9 +24,10 @@ except ImportError:
     pass
 
 default_dtype = 'float32'
-#default_dtype = 'float64'
-
 backend = None   # NumpyBackend or GnumpyBackend
+gradcheck_mode = False
+
+####################################################
 
 class NumpyBackend(object):
 
@@ -27,6 +42,15 @@ class NumpyBackend(object):
 
     @staticmethod
     def rand(*shape):    return np.array(np.random.rand(*shape),default_dtype)
+
+    @staticmethod
+    def randn(*shape):   return np.array(np.random.randn(*shape),default_dtype)
+
+    @staticmethod
+    def fill_rand(out):  out[:] = np.random.rand(out.shape[0],out.shape[1])
+
+    @staticmethod
+    def fill_randn(out): out[:] = np.random.randn(out.shape[0],out.shape[1])
 
     @staticmethod
     def array(A):        return np.array(A,default_dtype)
@@ -116,6 +140,36 @@ class NumpyBackend(object):
     @staticmethod
     def maximum(A,B,out):   return np.maximum(A,B,out=out)
 
+    @staticmethod
+    def clip_norm(A,axis,maxnorm,temp_mem):
+        if axis != 0:
+            raise NotImplementedError("normalization of individual rows not yet implemented")
+        # If a temporary memory buffer was supplied, use it instead of allocating a new one
+        if temp_mem != None:
+            T,t = temp_mem 
+        else:
+            T,t = np.empty(A.shape),np.empty((1,A.shape[1]))
+                
+        # Compute the square of the norm of weights entering each destination unit (norm along rows)
+        np.square(A,out=T)
+        np.sum(T,axis=0,out=t.ravel())
+
+        # Normalize each W[:,j] to have norm at most maxnorm
+        np.maximum(t,maxnorm**2,out=t)   # make sure anything with norm < maxnorm ends up not being scaled
+        np.sqrt(t,out=t)
+        reciprocal(t,out=t)
+        t *= maxnorm
+        np.multiply(A,t,out=A)
+
+    @staticmethod
+    def dropout(A,B,rate,outA,outB):
+        if outA == None: outA = A
+        if outB == None: outB = B
+        mask = np.random.binomial(1,rate,A.shape)
+        multiply(A,mask,out=outA)
+        if B != None:
+            multiply(B,mask,out=outB)
+
 #############################################
 
 class GnumpyBackend(object):
@@ -130,7 +184,16 @@ class GnumpyBackend(object):
     def ones(shape):     return gp.ones(shape)
 
     @staticmethod
-    def rand(*shape):    return gp.garray(np.random.rand(*shape)) # gp.rand(*shape)
+    def rand(*shape):    return gp.rand(*shape)
+
+    @staticmethod
+    def randn(*shape):   return gp.randn(*shape)
+
+    @staticmethod
+    def fill_rand(out):  out._base.fill_with_rand()
+
+    @staticmethod
+    def fill_randn(out): out._base.fill_with_randn()
 
     @staticmethod
     def array(A):        return gp.garray(A)
@@ -169,7 +232,7 @@ class GnumpyBackend(object):
     def square(A,out):
         if out == None:
             out = gp.empty(A.shape)
-        cudamat.pow(A._base_as_row(),2,target=out._base_as_row())
+        cudamat.square(A._base_as_row(),target=out._base_as_row())
         return out
 
     @staticmethod
@@ -305,7 +368,44 @@ class GnumpyBackend(object):
 
     @staticmethod
     def maximum(A,B,out):
-        raise NotImplementedError("maximum not implemented in cudamat")
+        if out == None:
+            out = gp.empty(A.shape)
+        if np.isscalar(A) and not np.isscalar(B):
+            A,B = B,A
+        if np.isscalar(B): A._base_shaped(1).maximum(B,target=out._base_shaped(1))
+        else:              A._base_shaped(1).maximum(B._base_shaped(1),target=out._base_shaped(1))
+        return out
+
+    @staticmethod
+    def clip_norm(A,axis,maxnorm,temp_mem):
+        if axis != 0:
+            raise NotImplementedError("normalization of individual rows not yet implemented")
+        # If a temporary memory buffer was supplied, use it instead of allocating a new one
+        if temp_mem != None:
+            T,t = temp_mem 
+        else:
+            T,t = empty(A.shape),empty((1,A.shape[1]))
+                
+        # Compute the square of the norm of weights entering each destination unit (norm along rows)
+        square(A,out=T)
+        sum(T,axis=0,out=t)
+
+        # Rescale any W[:,j] to have norm at most maxnorm 
+        A._base_shaped(1).mult_by_col_rsqrt(t._base_shaped(1),maxnorm,target=A._base_shaped(1))
+
+    @staticmethod
+    def dropout(A,B,rate,outA,outB):
+        if outA == None: outA = A
+        if outB == None: outB = B
+        if B != None:
+            cudamat.dropout(A._base_shaped(1),B._base_shaped(1),rate,
+                            targetA=outA._base_shaped(1),
+                            targetB=outB._base_shaped(1))
+        else:
+            cudamat.dropout(A._base_shaped(1),None,rate,
+                            targetA=outA._base_shaped(1),
+                            targetB=None)
+
 
 ###############################################################
 # Provide versions of numpy/gnumpy functions with "out" arguments
@@ -323,6 +423,9 @@ def empty(shape):          return backend.empty(shape)
 def zeros(shape):          return backend.zeros(shape)
 def ones(shape):           return backend.ones(shape)
 def rand(*shape):          return backend.rand(*shape)
+def randn(*shape):         return backend.randn(*shape)
+def fill_rand(out):        return backend.fill_rand(out)
+def fill_randn(out):       return backend.fill_randn(out)
 def array(A):              return backend.array(A)         # new copy of A
 def asarray(A):            return backend.asarray(A)       # new *view* of A
 def as_numpy(A):           return backend.as_numpy(A)
@@ -337,7 +440,7 @@ def exp(A,out=None):       return backend.exp(A,out)      if not np.isscalar(A) 
 def log(A,out=None):       return backend.log(A,out)      if not np.isscalar(A) else np.log(A)
 def abs(A,out=None):       return backend.abs(A,out)      if not np.isscalar(A) else np.abs(A)
 def sign(A,out=None):      return backend.sign(A,out)     if not np.isscalar(A) else np.sign(A)
-def sum(A,axis=0,out=None):return backend.sum(A,axis,out)
+def sum(A,axis=0,out=None):return __builtins__['sum'](A) if isinstance(A,list) else backend.sum(A,axis,out)
 def mean(A,axis=0,out=None):return backend.mean(A,axis,out)
 def add(A,B,out=None):     return backend.add(A,B,out)       # A + B
 def iadd(A,B):             return backend.iadd(A,B)          # A += B
@@ -350,18 +453,20 @@ def divide(A,B,out=None):  return backend.divide(A,B,out)    # A / B
 def idiv(A,B):             return backend.idiv(A,B)          # A /= B
 def reciprocal(A,out=None):return backend.reciprocal(A,out)  # 1. / A 
 def maximum(A,B,out=None): return backend.maximum(A,B,out)
-
-
+def clip_norm(A,axis=0,maxnorm=0.0,temp_mem=None): return backend.clip_norm(A,axis,maxnorm,temp_mem)   # A[:,i] ./= max(eps,sum(A[:,i]**2))
+def dropout(A,B,rate,outA=None,outB=None): return backend.dropout(A,B,rate,outA,outB)
 
 ###################################################
 
 def set_backend(name,dtype='float32'):
     global backend
     global default_dtype
+    global _gnumpy_loaded
     if name == 'gnumpy':
         assert(dtype == 'float32')
         if not _gnumpy_loaded:
-            raise RuntimeError("cannot set backend to gnumpy; module 'gnumpy' failed to import")
+            print "warning: cannot set backend to gnumpy; module 'gnumpy' failed to import; using numpy instead"
+            return
         backend = GnumpyBackend
         default_dtype = 'float32'
     elif name == 'numpy':
@@ -370,9 +475,106 @@ def set_backend(name,dtype='float32'):
     else:
         raise ValueError("unrecognized backend '%s'" % name)
 
+def garbage_collect():
+    global _gnumpy_loaded
+    if _gnumpy_loaded:
+        gp.free_reuse_cache(True)
+    gc.collect()
+
+class MemoryInfo(object):
+    def __init__(self):
+        self.cpu_avail = None
+        self.cpu_total = None
+        self.gpu_avail = None
+        self.gpu_total = None
+
+    def __repr__(self):
+        str  = 'cpu = %s/%s; ' % (_format_memsize(self.cpu_avail,fmt="2.2cM"),_format_memsize(self.cpu_total,fmt="2.2cM"))
+        str += 'gpu = %s/%s'   % (_format_memsize(self.gpu_avail,fmt="2.2cM"),_format_memsize(self.gpu_total,fmt="2.2cM"))
+        return str
+
+def memory_info(gc=False):
+    global _has_psutil
+
+    if gc: 
+        garbage_collect()
+
+    meminfo = MemoryInfo()
+
+    if _has_psutil: 
+        vmem = psutil.virtual_memory()
+        meminfo.cpu_avail = vmem.available
+        meminfo.cpu_total = vmem.total
+
+    if _gnumpy_loaded:
+        gmem = cudamat.cuda_memory_info()
+        meminfo.gpu_avail = gmem[0]
+        meminfo.gpu_total = gmem[1]
+
+    return meminfo
+
+
+# copied from http://code.activestate.com/recipes/578323-human-readable-filememory-sizes-v2/
+
+def _format_memsize(val,fmt=".2cM"):
+    """ define a size class to allow custom formatting
+        format specifiers supported : 
+            em : formats the size as bits in IEC format i.e. 1024 bits (128 bytes) = 1Kib 
+            eM : formats the size as Bytes in IEC format i.e. 1024 bytes = 1KiB
+            sm : formats the size as bits in SI format i.e. 1000 bits = 1kb
+            sM : formats the size as bytes in SI format i.e. 1000 bytes = 1KB
+            cm : format the size as bit in the common format i.e. 1024 bits (128 bytes) = 1Kb
+            cM : format the size as bytes in the common format i.e. 1024 bytes = 1KB
+    """
+    # work out the scale, suffix and base        
+    factor, suffix = (8, "b") if fmt[-1] in string.lowercase else (1,"B")
+    base = 1024 if fmt[-2] in ["e","c"] else 1000
+
+    # Add the i for the IEC format
+    suffix = "i"+ suffix if fmt[-2] == "e" else suffix
+
+    mult = ["","K","M","G","T","P"]
+
+    val = float(val) * factor
+    i = 0 if val < 1 else int(math.log(val, base))+1
+    v = val / math.pow(base,i)
+    v,i = (v,i) if v > 0.5 else (v*base,i-1)
+
+    # Identify if there is a width and extract it
+    width = "" if fmt.find(".") == -1 else fmt[:fmt.index(".")]        
+    precis = fmt[:-2] if width == "" else fmt[fmt.index("."):-2]
+
+    # do the precision bit first, so width/alignment works with the suffix
+    t = ("{0:{1}f}"+mult[i]+suffix).format(v, precis) 
+
+    return "{0:{1}}".format(t,width) if width != "" else t
+
+
+def set_gradcheck_mode(mode):
+    global gradcheck_mode
+    gradcheck_mode = mode
+    if mode:
+        set_backend("numpy","float64")  # need full precision to get sensible numbers out of gradcheck
+
+def get_gradcheck_mode():
+    global gradcheck_mode
+    return gradcheck_mode
+
+def seed_rand(seed):
+    global _gnumpy_loaded
+    random.seed(seed)
+    numpy.random.seed(seed*7)
+    if _gnumpy_loaded:
+        gp.seed_rand(seed*13)
+
 def sync_backend(): 
     '''Manually calls cudaSynchronizeThreads() if using cuda, else does nothing'''
+    global _gnumpy_loaded
     if _gnumpy_loaded:
         cudamat.cuda_sync_threads()
 
 set_backend('numpy')
+seed_rand(9876)
+
+
+
