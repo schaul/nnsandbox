@@ -202,8 +202,8 @@ def make_model(setting,Xshape,Yshape):
 
 #######################################################
 
-set_backend("gnumpy")
-
-main()
+if __name__=="__main__":
+    set_backend("gnumpy")
+    main()
 
 
